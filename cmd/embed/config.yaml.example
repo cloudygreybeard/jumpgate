@@ -1,0 +1,68 @@
+# Jumpgate — SSH relay access manager
+#
+# Copy to CONFIG_DIR/config.yaml and customise for your environment:
+#   jumpgate setup config   # creates ~/.config/jumpgate/ and copies this file
+#   $EDITOR ~/.config/jumpgate/config.yaml
+#   jumpgate connect
+#
+# Each named context defines a complete gate/remote/relay configuration.
+# Use `jumpgate connect <context>` to target a specific context.
+
+default_context: work
+
+contexts:
+  work:
+    role: local                                    # local (initiator) or remote (relay endpoint)
+
+    gate:
+      hostname: gateway.example.com                # SSH relay host FQDN
+      port: 22                                     # SSH port on the gate
+
+    auth:
+      type: kerberos                               # kerberos | key | none
+      realm: EXAMPLE.COM                           # Kerberos realm
+      user: your-username                          # Kerberos principal (user@realm)
+      kdc: kdc.example.com                         # KDC hostname (reachable from gate)
+      kdc_local_port: 8888                         # local port for ephemeral KDC forward
+      kdc_remote_port: 88                          # KDC service port
+      kinit: /opt/homebrew/opt/krb5/bin/kinit      # path to MIT kinit (Homebrew)
+      cc_file: /tmp/krb5cc_work                    # credential cache file
+
+    remote:
+      user: your-remote-username                   # SSH user on the remote host
+      key: ~/.ssh/id_ed25519                       # SSH private key for remote auth
+      remote_dir: ~/jumpgate                       # where jumpgate config is deployed on the remote
+
+    relay:
+      remote_port: 0                               # port registered on the gate (0 = auto-generate)
+
+    # Platform-specific — consumed by hook scripts, not by the jumpgate binary.
+    # The macOS hooks (e.g. from a site pack) use these values.
+    keychain:
+      totp_service: "totp key"                     # macOS Keychain service for TOTP PIN
+      totp_account: your-username                  # macOS Keychain account for TOTP PIN
+      krb_service: jumpgate-kerberos               # macOS Keychain service for Kerberos password
+      krb_account: your-username                   # macOS Keychain account for Kerberos password
+
+    totp:
+      cli: /opt/homebrew/bin/totp-cli              # path to totp-cli binary
+      namespace: your-totp-namespace               # totp-cli namespace
+      account: your-username                       # totp-cli account
+
+    container:
+      runtime: podman                              # container runtime (podman or docker)
+      image: jumpgate-kinit                        # container image name for kinit
+
+    windows_app: "Windows App"                     # RDP client application name (macOS hook)
+
+  # Example: a remote-side context (run on the relay endpoint)
+  # work-remote:
+  #   role: remote
+  #   gate:
+  #     hostname: gateway.example.com
+  #     port: 22
+  #   auth:
+  #     type: none
+  #     user: your-username
+  #   relay:
+  #     remote_port: 0                              # 0 = auto-generate on first connect
