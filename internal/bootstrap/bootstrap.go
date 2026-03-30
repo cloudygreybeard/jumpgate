@@ -13,10 +13,15 @@ import (
 
 // RemoteConfig builds a minimal remote-role config from a local context.
 func RemoteConfig(contextName string, ctx *config.Context) *config.Config {
+	uid := ctx.UID
+	if uid == "" {
+		uid = config.GenerateUID()
+	}
 	return &config.Config{
 		DefaultContext: contextName,
 		Contexts: map[string]config.Context{
 			contextName: {
+				UID:  uid,
 				Role: "remote",
 				Gate: config.GateConfig{
 					Hostname: ctx.Gate.Hostname,

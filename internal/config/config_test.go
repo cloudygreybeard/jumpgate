@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -178,8 +179,10 @@ func TestApplyDefaults(t *testing.T) {
 	if p.Auth.Kinit != "kinit" {
 		t.Errorf("Auth.Kinit = %q, want %q", p.Auth.Kinit, "kinit")
 	}
-	if p.Auth.CCFile != "/tmp/krb5cc_lab" {
-		t.Errorf("Auth.CCFile = %q, want %q", p.Auth.CCFile, "/tmp/krb5cc_lab")
+	home, _ := os.UserHomeDir()
+	wantPrefix := filepath.Join(home, ".cache", "jumpgate", "krb5cc_")
+	if !strings.HasPrefix(p.Auth.CCFile, wantPrefix) {
+		t.Errorf("Auth.CCFile = %q, want prefix %q", p.Auth.CCFile, wantPrefix)
 	}
 	if p.Remote.RemoteDir != "~/jumpgate" {
 		t.Errorf("Remote.RemoteDir = %q, want %q", p.Remote.RemoteDir, "~/jumpgate")
@@ -254,5 +257,139 @@ contexts:
 	}
 	if rc.Context.Gate.Hostname != "gw.example.com" {
 		t.Errorf("hostname = %q", rc.Context.Gate.Hostname)
+	}
+}
+
+func TestGenerateUID(t *testing.T) {
+	uid := GenerateUID()
+	parts := strings.Split(uid, "-")
+	if len(parts) != 5 {
+		t.Fatalf("GenerateUID() = %q, want 5 dash-separated parts", uid)
+	}
+	if len(uid) != 36 {
+		t.Errorf("GenerateUID() length = %d, want 36", len(uid))
+	}
+
+	uid2 := GenerateUID()
+	if uid == uid2 {
+		t.Error("two GenerateUID calls returned the same value")
+	}
+}
+
+func TestResolveCCFileWithUID(t *testing.T) {
+	cfg := `
+default_context: myctx
+contexts:
+  myctx:
+    uid: abcd1234-5678-4aaa-bbbb-ccccddddeeee
+    gate:
+      hostname: gw.example.com
+    auth:
+      type: kerberos
+      realm: EXAMPLE.COM
+      user: alice
+`
+	path := writeTestConfig(t, cfg)
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rc, err := c.Resolve("myctx")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, ".cache", "jumpgate", "krb5cc_abcd1234-5678-4aaa-bbbb-ccccddddeeee")
+	if rc.Context.Auth.CCFile != want {
+		t.Errorf("CCFile = %q, want %q", rc.Context.Auth.CCFile, want)
+	}
+	if rc.Derived.UID != "abcd1234-5678-4aaa-bbbb-ccccddddeeee" {
+		t.Errorf("Derived.UID = %q, want uid from context", rc.Derived.UID)
+	}
+}
+
+func TestBackfillUIDs(t *testing.T) {
+	cfg := `
+default_context: work
+contexts:
+  work:
+    gate:
+      hostname: gw.example.com
+  lab:
+    gate:
+      hostname: lab.example.com
+`
+	path := writeTestConfig(t, cfg)
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if c.Contexts["work"].UID == "" {
+		t.Error("expected backfilled UID for work context")
+	}
+	if c.Contexts["lab"].UID == "" {
+		t.Error("expected backfilled UID for lab context")
+	}
+	if c.Contexts["work"].UID == c.Contexts["lab"].UID {
+		t.Error("expected distinct UIDs for work and lab")
+	}
+
+	// Verify UIDs were persisted to the file
+	c2, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.Contexts["work"].UID != c.Contexts["work"].UID {
+		t.Errorf("persisted work UID %q != original %q", c2.Contexts["work"].UID, c.Contexts["work"].UID)
+	}
+	if c2.Contexts["lab"].UID != c.Contexts["lab"].UID {
+		t.Errorf("persisted lab UID %q != original %q", c2.Contexts["lab"].UID, c.Contexts["lab"].UID)
+	}
+}
+
+func TestExistingUIDNotOverwritten(t *testing.T) {
+	cfg := `
+default_context: work
+contexts:
+  work:
+    uid: fixed-uid-1234
+    gate:
+      hostname: gw.example.com
+`
+	path := writeTestConfig(t, cfg)
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Contexts["work"].UID != "fixed-uid-1234" {
+		t.Errorf("UID = %q, want %q (should not be overwritten)", c.Contexts["work"].UID, "fixed-uid-1234")
+	}
+}
+
+func TestCCFileExplicitNotOverridden(t *testing.T) {
+	cfg := `
+default_context: work
+contexts:
+  work:
+    uid: some-uid
+    gate:
+      hostname: gw.example.com
+    auth:
+      cc_file: /custom/krb5cc
+`
+	path := writeTestConfig(t, cfg)
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc, err := c.Resolve("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.Context.Auth.CCFile != "/custom/krb5cc" {
+		t.Errorf("CCFile = %q, want %q (explicit should not be overridden)", rc.Context.Auth.CCFile, "/custom/krb5cc")
 	}
 }

@@ -54,6 +54,38 @@ func TestRemoteConfig(t *testing.T) {
 	if ctx.Auth.Realm != "" {
 		t.Errorf("auth.realm should be empty for remote, got %q", ctx.Auth.Realm)
 	}
+	if ctx.UID == "" {
+		t.Error("remote context should have a UID")
+	}
+}
+
+func TestRemoteConfigPreservesSourceUID(t *testing.T) {
+	local := &config.Context{
+		UID:  "source-uid-1234",
+		Role: "local",
+		Gate: config.GateConfig{Hostname: "gw.example.com", Port: 22},
+		Auth: config.AuthConfig{User: "alice"},
+	}
+
+	rc := RemoteConfig("myctx", local)
+	ctx := rc.Contexts["myctx"]
+	if ctx.UID != "source-uid-1234" {
+		t.Errorf("UID = %q, want source-uid-1234 (should copy from source)", ctx.UID)
+	}
+}
+
+func TestRemoteConfigGeneratesUIDWhenMissing(t *testing.T) {
+	local := &config.Context{
+		Role: "local",
+		Gate: config.GateConfig{Hostname: "gw.example.com", Port: 22},
+		Auth: config.AuthConfig{User: "alice"},
+	}
+
+	rc := RemoteConfig("myctx", local)
+	ctx := rc.Contexts["myctx"]
+	if ctx.UID == "" {
+		t.Error("UID should be auto-generated when source has none")
+	}
 }
 
 func TestEncodeDecodeRoundTrip(t *testing.T) {

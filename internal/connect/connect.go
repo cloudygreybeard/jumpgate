@@ -157,7 +157,11 @@ func connectRemote(ctx context.Context, rc *config.ResolvedContext) error {
 
 	fmt.Printf("Relay [%s]: active\n", rc.Name)
 
-	if err := internalssh.WriteRelayMarker(ctx, gateHost, rc.Name, rc.Context.Relay.RemotePort); err != nil {
+	markerID := rc.Context.UID
+	if markerID == "" {
+		markerID = rc.Name
+	}
+	if err := internalssh.WriteRelayMarker(ctx, gateHost, markerID, rc.Context.Relay.RemotePort); err != nil {
 		slog.Warn("could not write relay marker on gate", "error", err)
 	} else {
 		slog.Debug("relay marker written", "port", rc.Context.Relay.RemotePort)
@@ -175,7 +179,11 @@ func discoverRelayPort(ctx context.Context, rc *config.ResolvedContext, cfg *con
 	}
 
 	gateHost := rc.Derived.GateHost
-	markerPort, err := internalssh.ReadRelayMarker(ctx, gateHost, rc.Name)
+	markerID := rc.Context.UID
+	if markerID == "" {
+		markerID = rc.Name
+	}
+	markerPort, err := internalssh.ReadRelayMarker(ctx, gateHost, markerID)
 	if err != nil {
 		slog.Debug("relay marker read failed", "error", err)
 		return false

@@ -11,14 +11,14 @@ import (
 
 const markerDir = "~/.jumpgate"
 
-func markerPath(contextName string) string {
-	return fmt.Sprintf("%s/relay-%s.port", markerDir, contextName)
+func markerPath(contextUID string) string {
+	return fmt.Sprintf("%s/relay-%s.port", markerDir, contextUID)
 }
 
 // WriteRelayMarker writes the relay port to a marker file on the gate host.
-// This allows the local side to auto-discover which port the remote is using.
-func WriteRelayMarker(ctx context.Context, gateHost, contextName string, port int) error {
-	cmd := fmt.Sprintf("mkdir -p %s && echo %d > %s", markerDir, port, markerPath(contextName))
+// The contextUID should be the context's stable UID to avoid leaking names on shared hosts.
+func WriteRelayMarker(ctx context.Context, gateHost, contextUID string, port int) error {
+	cmd := fmt.Sprintf("mkdir -p %s && echo %d > %s", markerDir, port, markerPath(contextUID))
 	slog.Debug("relay-marker", "op", "write", "host", gateHost, "port", port)
 
 	c := exec.CommandContext(ctx, "ssh", gateHost, cmd)
@@ -30,8 +30,8 @@ func WriteRelayMarker(ctx context.Context, gateHost, contextName string, port in
 
 // ReadRelayMarker reads the relay port from a marker file on the gate host.
 // Returns 0, nil if the file does not exist or cannot be read.
-func ReadRelayMarker(ctx context.Context, gateHost, contextName string) (int, error) {
-	cmd := fmt.Sprintf("cat %s 2>/dev/null || true", markerPath(contextName))
+func ReadRelayMarker(ctx context.Context, gateHost, contextUID string) (int, error) {
+	cmd := fmt.Sprintf("cat %s 2>/dev/null || true", markerPath(contextUID))
 	slog.Debug("relay-marker", "op", "read", "host", gateHost)
 
 	c := exec.CommandContext(ctx, "ssh", gateHost, cmd)
@@ -54,8 +54,8 @@ func ReadRelayMarker(ctx context.Context, gateHost, contextName string) (int, er
 }
 
 // RemoveRelayMarker removes the marker file from the gate host.
-func RemoveRelayMarker(ctx context.Context, gateHost, contextName string) error {
-	cmd := fmt.Sprintf("rm -f %s", markerPath(contextName))
+func RemoveRelayMarker(ctx context.Context, gateHost, contextUID string) error {
+	cmd := fmt.Sprintf("rm -f %s", markerPath(contextUID))
 	slog.Debug("relay-marker", "op", "remove", "host", gateHost)
 
 	c := exec.CommandContext(ctx, "ssh", gateHost, cmd)
