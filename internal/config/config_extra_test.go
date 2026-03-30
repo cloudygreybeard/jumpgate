@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -105,8 +106,10 @@ func TestApplyDefaults_AllEmpty(t *testing.T) {
 	if p.Auth.Kinit != "kinit" {
 		t.Errorf("Kinit = %q, want 'kinit'", p.Auth.Kinit)
 	}
-	if p.Auth.CCFile != "/tmp/krb5cc_test" {
-		t.Errorf("CCFile = %q, want '/tmp/krb5cc_test'", p.Auth.CCFile)
+	home, _ := os.UserHomeDir()
+	wantPrefix := filepath.Join(home, ".cache", "jumpgate", "krb5cc_")
+	if !strings.HasPrefix(p.Auth.CCFile, wantPrefix) {
+		t.Errorf("CCFile = %q, want prefix %q", p.Auth.CCFile, wantPrefix)
 	}
 	if p.Remote.RemoteDir != "~/jumpgate" {
 		t.Errorf("RemoteDir = %q, want '~/jumpgate'", p.Remote.RemoteDir)

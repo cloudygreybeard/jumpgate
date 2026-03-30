@@ -151,6 +151,13 @@ func runInitFromPaste(configDir string) error {
 		return fmt.Errorf("decoding bootstrap payload: %w", err)
 	}
 
+	for name, ctx := range cfg.Contexts {
+		if ctx.UID == "" {
+			ctx.UID = config.GenerateUID()
+			cfg.Contexts[name] = ctx
+		}
+	}
+
 	ctxName := cfg.DefaultContext
 	if _, ok := cfg.Contexts[ctxName]; !ok {
 		for k := range cfg.Contexts {

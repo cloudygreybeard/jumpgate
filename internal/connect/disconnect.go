@@ -22,7 +22,11 @@ func Disconnect(ctx context.Context, rc *config.ResolvedContext) {
 func disconnectRemote(ctx context.Context, rc *config.ResolvedContext) {
 	// Remove relay marker from the gate before tearing down the connection
 	gateHost := rc.Derived.GateHost
-	if err := internalssh.RemoveRelayMarker(ctx, gateHost, rc.Name); err != nil {
+	markerID := rc.Context.UID
+	if markerID == "" {
+		markerID = rc.Name
+	}
+	if err := internalssh.RemoveRelayMarker(ctx, gateHost, markerID); err != nil {
 		slog.Debug("relay marker cleanup failed", "error", err)
 	}
 

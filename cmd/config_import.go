@@ -61,6 +61,8 @@ Examples:
 			return fmt.Errorf("loading config: %w", err)
 		}
 
+		ctx.UID = config.GenerateUID()
+
 		if err := config.SetContext(doc, ctxName, ctx); err != nil {
 			return err
 		}

@@ -184,6 +184,41 @@ func TestRenameContext(t *testing.T) {
 	}
 }
 
+func TestRenameContext_PreservesUID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	cfg := `default_context: alpha
+contexts:
+  alpha:
+    uid: test-uid-preserved
+    gate:
+      hostname: gw.example.com
+`
+	if err := os.WriteFile(path, []byte(cfg), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, doc, err := LoadRaw(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RenameContext(doc, "alpha", "renamed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveRaw(path, doc); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if c.Contexts["renamed"].UID != "test-uid-preserved" {
+		t.Errorf("UID = %q, want test-uid-preserved (rename must preserve UID)", c.Contexts["renamed"].UID)
+	}
+}
+
 func TestRenameContext_DuplicateTarget(t *testing.T) {
 	path := writeMutateTestConfig(t)
 	_, doc, err := LoadRaw(path)

@@ -12,6 +12,7 @@ default_context: work
 
 contexts:
   work:
+    # uid: (auto-generated)                         # stable identifier for filesystem artifacts
     role: local                                    # local (initiator) or remote (relay endpoint)
 
     gate:
@@ -26,7 +27,7 @@ contexts:
       kdc_local_port: 8888                         # local port for ephemeral KDC forward
       kdc_remote_port: 88                          # KDC service port
       kinit: /opt/homebrew/opt/krb5/bin/kinit      # path to MIT kinit (Homebrew)
-      cc_file: /tmp/krb5cc_work                    # credential cache file
+      # cc_file: ~/.cache/jumpgate/krb5cc_<uid>      # credential cache (default: auto from uid)
 
     remote:
       user: your-remote-username                   # SSH user on the remote host

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ type Config struct {
 }
 
 type Context struct {
+	UID        string          `json:"uid,omitempty" yaml:"uid,omitempty"`
 	Role       string          `json:"role" yaml:"role"`
 	Gate       GateConfig      `json:"gate" yaml:"gate"`
 	Auth       AuthConfig      `json:"auth" yaml:"auth"`
@@ -25,6 +27,24 @@ type Context struct {
 	TOTP       TOTPConfig      `json:"totp" yaml:"totp"`
 	Container  ContainerConfig `json:"container" yaml:"container"`
 	WindowsApp string          `json:"windows_app" yaml:"windows_app"`
+}
+
+// GenerateUID produces a random UUIDv4 string.
+func GenerateUID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+// DefaultCacheDir returns the XDG-compliant cache directory for jumpgate.
+func DefaultCacheDir() string {
+	if dir := os.Getenv("XDG_CACHE_HOME"); dir != "" {
+		return filepath.Join(dir, "jumpgate")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".cache", "jumpgate")
 }
 
 type GateConfig struct {
@@ -100,6 +120,7 @@ type ContainerConfig struct {
 // Derived holds values computed from the context config at runtime.
 type Derived struct {
 	ContextName   string `json:"context_name" yaml:"context_name"`
+	UID           string `json:"uid" yaml:"uid"`
 	AuthPrincipal string `json:"auth_principal" yaml:"auth_principal"`
 	GateHost      string `json:"gate_host" yaml:"gate_host"`
 	RemoteHost    string `json:"remote_host" yaml:"remote_host"`
@@ -131,6 +152,8 @@ func DefaultConfigFile() string {
 }
 
 // Load reads and parses the config file at path.
+// Contexts missing a UID are automatically assigned one and the config is
+// persisted back so the UID is stable across runs.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -150,7 +173,40 @@ func Load(path string) (*Config, error) {
 		cfg.DefaultContext = "default"
 	}
 
+	if backfillUIDs(&cfg) {
+		_ = persistBackfilledUIDs(path, &cfg)
+	}
+
 	return &cfg, nil
+}
+
+// backfillUIDs generates UIDs for any contexts missing one.
+// Returns true if any were generated.
+func backfillUIDs(cfg *Config) bool {
+	changed := false
+	for name, ctx := range cfg.Contexts {
+		if ctx.UID == "" {
+			ctx.UID = GenerateUID()
+			cfg.Contexts[name] = ctx
+			changed = true
+		}
+	}
+	return changed
+}
+
+// persistBackfilledUIDs writes generated UIDs back to the config file,
+// preserving comments and structure via the raw YAML node API.
+func persistBackfilledUIDs(path string, cfg *Config) error {
+	_, doc, err := LoadRaw(path)
+	if err != nil {
+		return err
+	}
+	for name, ctx := range cfg.Contexts {
+		if err := SetContext(doc, name, ctx); err != nil {
+			return err
+		}
+	}
+	return SaveRaw(path, doc)
 }
 
 // Resolve selects a context by name (or the default) and applies defaults.
@@ -176,6 +232,7 @@ func (c *Config) Resolve(contextName string) (*ResolvedContext, error) {
 
 	d := Derived{
 		ContextName:   contextName,
+		UID:           ctx.UID,
 		AuthPrincipal: ctx.Auth.User + "@" + ctx.Auth.Realm,
 		GateHost:      contextName + "-gate",
 		RemoteHost:    contextName,
@@ -217,7 +274,12 @@ func applyDefaults(ctx *Context, contextName string) {
 		ctx.Auth.Kinit = "kinit"
 	}
 	if ctx.Auth.CCFile == "" {
-		ctx.Auth.CCFile = "/tmp/krb5cc_" + contextName
+		cacheDir := DefaultCacheDir()
+		id := contextName
+		if ctx.UID != "" {
+			id = ctx.UID
+		}
+		ctx.Auth.CCFile = filepath.Join(cacheDir, "krb5cc_"+id)
 	}
 	if ctx.Remote.RemoteDir == "" {
 		ctx.Remote.RemoteDir = "~/jumpgate"

@@ -176,6 +176,17 @@ contexts:
       remote_port: 0               # 0 = auto-generate on first connect
 ```
 
+### Context UID
+
+Each context is automatically assigned a unique identifier (`uid`) when
+created. The UID is a UUIDv4 used for filesystem artifacts where uniqueness
+and privacy matter -- Kerberos credential caches (`~/.cache/jumpgate/krb5cc_<uid>`)
+and relay marker files on shared hosts (`~/.jumpgate/relay-<uid>.port`).
+Existing configs without UIDs receive one automatically on first load.
+
+The human-readable context name remains the primary interface for SSH aliases,
+commands, display output, and hooks.
+
 ### Role
 
 Each context declares a `role` that determines its behavior:
@@ -208,12 +219,13 @@ to use `--relay-port`.
 #### Auto-discovery
 
 When the remote opens a relay, jumpgate writes a marker file on the gate
-(`~/.jumpgate/relay-<context>.port`) containing the active port number. On
+(`~/.jumpgate/relay-<uid>.port`) containing the active port number. On
 the local side, `jumpgate connect` reads this marker before probing, so the
 local end automatically discovers port changes made at the remote end. If
 the marker port differs from the local config, the local config and SSH
 config are updated automatically. The marker file is cleaned up on
-`jumpgate disconnect`.
+`jumpgate disconnect`. The marker uses the context's UID (not its name) so
+that human-readable names are not exposed on shared hosts.
 
 See [cmd/embed/config.yaml.example](cmd/embed/config.yaml.example) for all
 options.

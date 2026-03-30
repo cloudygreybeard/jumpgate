@@ -167,6 +167,7 @@ or omit it to create a minimal scaffold.`,
 				Auth: config.AuthConfig{Type: "key"},
 			}
 		}
+		ctx.UID = config.GenerateUID()
 
 		if err := config.AddContext(doc, name, ctx); err != nil {
 			return err
