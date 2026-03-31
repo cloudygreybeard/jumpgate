@@ -29,6 +29,7 @@ import (
 type Server struct {
 	config         *ssh.ServerConfig
 	addr           string
+	mu             sync.Mutex
 	listener       net.Listener
 	fingerprint    string
 	authKeyType    string
@@ -102,7 +103,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", s.addr, err)
 	}
+	s.mu.Lock()
 	s.listener = ln
+	s.mu.Unlock()
 
 	go func() {
 		<-ctx.Done()
@@ -134,8 +137,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 // Addr returns the listener address, or empty if not yet listening.
 func (s *Server) Addr() string {
-	if s.listener != nil {
-		return s.listener.Addr().String()
+	s.mu.Lock()
+	ln := s.listener
+	s.mu.Unlock()
+	if ln != nil {
+		return ln.Addr().String()
 	}
 	return ""
 }
