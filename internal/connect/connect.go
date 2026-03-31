@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/cloudygreybeard/jumpgate/internal/auth"
@@ -131,10 +132,17 @@ func connectRemote(ctx context.Context, rc *config.ResolvedContext) error {
 
 	socketPath := rc.Derived.RelaySocket
 	relayHost := rc.Derived.RelayHost
+	isWindows := runtime.GOOS == "windows"
 
-	if socketExists(socketPath) {
+	if !isWindows && socketExists(socketPath) {
 		if err := internalssh.CheckSocket(ctx, relayHost, socketPath); err == nil {
 			fmt.Printf("Relay [%s]: already active\n", rc.Name)
+			return nil
+		}
+	}
+	if isWindows && internalssh.RelayPID != 0 {
+		if err := internalssh.CheckSocket(ctx, relayHost, socketPath); err == nil {
+			fmt.Printf("Relay [%s]: already active (pid %d)\n", rc.Name, internalssh.RelayPID)
 			return nil
 		}
 	}
@@ -151,11 +159,16 @@ func connectRemote(ctx context.Context, rc *config.ResolvedContext) error {
 		return fmt.Errorf("opening relay: %w", err)
 	}
 
-	if err := internalssh.CheckSocket(ctx, relayHost, socketPath); err != nil {
-		return fmt.Errorf("relay [%s]: failed to connect", rc.Name)
+	if isWindows {
+		if err := waitForRelayProcess(ctx, rc.Name); err != nil {
+			return err
+		}
+	} else {
+		if err := internalssh.CheckSocket(ctx, relayHost, socketPath); err != nil {
+			return fmt.Errorf("relay [%s]: failed to connect", rc.Name)
+		}
+		fmt.Printf("Relay [%s]: active\n", rc.Name)
 	}
-
-	fmt.Printf("Relay [%s]: active\n", rc.Name)
 
 	markerID := rc.Context.UID
 	if markerID == "" {
@@ -211,6 +224,42 @@ func discoverRelayPort(ctx context.Context, rc *config.ResolvedContext, cfg *con
 	}
 
 	return true
+}
+
+// waitForRelayProcess polls the background SSH process on Windows, failing
+// fast if it exits (auth failure, bad host, etc.) or declaring success once
+// it has remained alive long enough to have completed the SSH handshake.
+func waitForRelayProcess(ctx context.Context, name string) error {
+	exited := internalssh.RelayExited()
+	if exited == nil {
+		return fmt.Errorf("relay [%s]: no process started", name)
+	}
+
+	const stabiliseTimeout = 30 * time.Second
+	const checkInterval = 250 * time.Millisecond
+
+	deadline := time.After(stabiliseTimeout)
+	tick := time.NewTicker(checkInterval)
+	defer tick.Stop()
+
+	for {
+		select {
+		case err := <-exited:
+			if err != nil {
+				return fmt.Errorf("relay [%s]: SSH process exited (%w) -- check credentials or host key", name, err)
+			}
+			return fmt.Errorf("relay [%s]: SSH process exited unexpectedly", name)
+		case <-deadline:
+			return fmt.Errorf("relay [%s]: timed out waiting for SSH connection (%s)", name, stabiliseTimeout)
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+			if internalssh.RelayPID != 0 {
+				fmt.Printf("Relay [%s]: active (pid %d)\n", name, internalssh.RelayPID)
+				return nil
+			}
+		}
+	}
 }
 
 // persistRelayPort writes the auto-generated relay port back to config.yaml.
