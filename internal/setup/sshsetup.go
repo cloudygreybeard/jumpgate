@@ -192,6 +192,7 @@ func writeRemoteGateFallback(b *strings.Builder, d TemplateData) {
 	}
 	fmt.Fprintf(b, "  GSSAPIAuthentication yes\n")
 	fmt.Fprintf(b, "  GSSAPIDelegateCredentials no\n")
+	fmt.Fprintf(b, "  MACs hmac-sha2-256,hmac-sha2-512\n")
 	fmt.Fprintf(b, "  ServerAliveInterval 30\n")
 	b.WriteString("\n")
 }
@@ -207,6 +208,7 @@ func writeRemoteRelayFallback(b *strings.Builder, d TemplateData) {
 	}
 	fmt.Fprintf(b, "  GSSAPIAuthentication yes\n")
 	fmt.Fprintf(b, "  GSSAPIDelegateCredentials no\n")
+	fmt.Fprintf(b, "  MACs hmac-sha2-256,hmac-sha2-512\n")
 	fmt.Fprintf(b, "  ServerAliveInterval 30\n")
 	if d.RelayPort > 0 {
 		fmt.Fprintf(b, "  RemoteForward %d localhost:22\n", d.RelayPort)

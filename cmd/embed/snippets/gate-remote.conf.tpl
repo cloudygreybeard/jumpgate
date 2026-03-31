@@ -8,4 +8,5 @@ Host {{.Context}}-gate{{if .IsDefault}} gate{{end}}
 {{- end}}
   GSSAPIAuthentication yes
   GSSAPIDelegateCredentials no
+  MACs hmac-sha2-256,hmac-sha2-512
   ServerAliveInterval 30

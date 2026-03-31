@@ -8,6 +8,7 @@ Host {{.Context}}-relay{{if .IsDefault}} relay{{end}}
 {{- end}}
   GSSAPIAuthentication yes
   GSSAPIDelegateCredentials no
+  MACs hmac-sha2-256,hmac-sha2-512
   ServerAliveInterval 30
 {{- if gt .RelayPort 0}}
   RemoteForward {{.RelayPort}} localhost:22

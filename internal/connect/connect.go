@@ -226,35 +226,41 @@ func discoverRelayPort(ctx context.Context, rc *config.ResolvedContext, cfg *con
 	return true
 }
 
-// waitForRelayProcess polls the background SSH process on Windows, failing
-// fast if it exits (auth failure, bad host, etc.) or declaring success once
-// it has remained alive long enough to have completed the SSH handshake.
+// waitForRelayProcess monitors the background SSH process on Windows, failing
+// fast if it exits (auth failure, bad host, MAC error, etc.) and only
+// declaring success once the process has survived a stabilisation window,
+// ensuring the SSH handshake has completed.
 func waitForRelayProcess(ctx context.Context, name string) error {
 	exited := internalssh.RelayExited()
 	if exited == nil {
 		return fmt.Errorf("relay [%s]: no process started", name)
 	}
 
-	const stabiliseTimeout = 30 * time.Second
+	const overallTimeout = 60 * time.Second
+	const stabiliseWindow = 5 * time.Second
 	const checkInterval = 250 * time.Millisecond
 
-	deadline := time.After(stabiliseTimeout)
+	deadline := time.After(overallTimeout)
 	tick := time.NewTicker(checkInterval)
 	defer tick.Stop()
 
+	start := time.Now()
 	for {
 		select {
 		case err := <-exited:
 			if err != nil {
-				return fmt.Errorf("relay [%s]: SSH process exited (%w) -- check credentials or host key", name, err)
+				return fmt.Errorf("relay [%s]: SSH process exited (%w)", name, err)
 			}
 			return fmt.Errorf("relay [%s]: SSH process exited unexpectedly", name)
 		case <-deadline:
-			return fmt.Errorf("relay [%s]: timed out waiting for SSH connection (%s)", name, stabiliseTimeout)
+			return fmt.Errorf("relay [%s]: timed out waiting for SSH connection (%s)", name, overallTimeout)
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-tick.C:
-			if internalssh.RelayPID != 0 {
+			if internalssh.RelayPID == 0 {
+				return fmt.Errorf("relay [%s]: SSH process exited", name)
+			}
+			if time.Since(start) >= stabiliseWindow {
 				fmt.Printf("Relay [%s]: active (pid %d)\n", name, internalssh.RelayPID)
 				return nil
 			}
