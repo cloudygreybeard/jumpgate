@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"runtime"
 
 	"github.com/cloudygreybeard/jumpgate/internal/auth"
 	"github.com/cloudygreybeard/jumpgate/internal/config"
@@ -33,7 +34,13 @@ func disconnectRemote(ctx context.Context, rc *config.ResolvedContext) {
 	socketPath := rc.Derived.RelaySocket
 	relayHost := rc.Derived.RelayHost
 
-	if socketExists(socketPath) {
+	if runtime.GOOS == "windows" {
+		if err := internalssh.ExitSocket(ctx, relayHost, socketPath); err != nil {
+			fmt.Printf("Relay [%s]: already gone\n", rc.Name)
+		} else {
+			fmt.Printf("Relay [%s]: closed\n", rc.Name)
+		}
+	} else if socketExists(socketPath) {
 		if err := internalssh.ExitSocket(ctx, relayHost, socketPath); err != nil {
 			fmt.Printf("Relay [%s]: already gone\n", rc.Name)
 		} else {

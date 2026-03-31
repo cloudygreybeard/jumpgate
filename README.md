@@ -308,15 +308,29 @@ jumpgate setup remote-init myhost
 This prints a compact base64 string (~400 chars) containing the minimal
 remote-role config. Copy it to the clipboard.
 
-On the **remote** (e.g. a WSL terminal via Windows App), install jumpgate
-and paste the payload:
+On the **remote**, install jumpgate and paste the payload. This works from
+WSL, native Linux, or Windows PowerShell:
 
 ```bash
+# Linux / WSL
 curl -sL https://github.com/cloudygreybeard/jumpgate/releases/latest/download/install.sh | sh
 jumpgate init --paste
 # paste the base64 string, press Enter
 jumpgate connect
 ```
+
+```powershell
+# Windows PowerShell (pre-WSL bootstrap)
+irm https://github.com/cloudygreybeard/jumpgate/releases/latest/download/install.ps1 | iex
+jumpgate init --paste
+# paste the base64 string, press Enter
+jumpgate connect
+```
+
+On Windows, `jumpgate connect` runs the relay as a background process
+without ControlMaster (which Windows OpenSSH does not support). The process
+is monitored directly: if SSH exits (auth failure, bad host key), jumpgate
+reports the error immediately rather than waiting for a timeout.
 
 The remote now has a relay tunnel open through the gate.
 
