@@ -23,7 +23,7 @@ func Connect(ctx context.Context, rc *config.ResolvedContext, cfg *config.Config
 	if rc.IsLocal() {
 		return connectLocal(ctx, rc, cfg)
 	}
-	return connectRemote(ctx, rc)
+	return connectRemote(ctx, rc, cfg)
 }
 
 // pollDelay returns a capped exponential backoff duration.
@@ -119,7 +119,7 @@ func connectLocal(ctx context.Context, rc *config.ResolvedContext, cfg *config.C
 	}
 }
 
-func connectRemote(ctx context.Context, rc *config.ResolvedContext) error {
+func connectRemote(ctx context.Context, rc *config.ResolvedContext, cfg *config.Config) error {
 	if rc.Context.Relay.RemotePort == 0 {
 		port := rand.Intn(16384) + 49152
 		rc.Context.Relay.RemotePort = port
@@ -127,6 +127,14 @@ func connectRemote(ctx context.Context, rc *config.ResolvedContext) error {
 
 		if err := persistRelayPort(rc); err != nil {
 			slog.Warn("could not persist relay port to config", "error", err)
+		}
+
+		if cfg != nil {
+			if ctxCfg, ok := cfg.Contexts[rc.Name]; ok {
+				ctxCfg.Relay.RemotePort = port
+				cfg.Contexts[rc.Name] = ctxCfg
+			}
+			ensureSSHConfig(rc, cfg)
 		}
 	}
 
@@ -146,7 +154,7 @@ func connectRemoteWindows(ctx context.Context, rc *config.ResolvedContext) error
 		rc.Name, relayHost, rc.Context.Relay.RemotePort)
 	fmt.Println("  (foreground session — Ctrl+C to close)")
 
-	return internalssh.RunRelayForeground(ctx, relayHost)
+	return internalssh.RunRelayForeground(ctx, relayHost, rc.Context.Relay.RemotePort)
 }
 
 func connectRemoteUnix(ctx context.Context, rc *config.ResolvedContext) error {

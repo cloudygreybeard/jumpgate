@@ -111,7 +111,7 @@ func TestConnectRemote_AlreadyActive(t *testing.T) {
 	}
 	defer l.Close()
 
-	err = connectRemote(context.Background(), rc)
+	err = connectRemote(context.Background(), rc, nil)
 	if err != nil {
 		t.Errorf("connectRemote already active: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestConnectRemote_New(t *testing.T) {
 	rc.Derived.GateSocket = ""
 	rc.Derived.RelaySocket = filepath.Join(t.TempDir(), "r.sock")
 
-	err := connectRemote(context.Background(), rc)
+	err := connectRemote(context.Background(), rc, nil)
 	if err != nil {
 		t.Errorf("connectRemote new: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestConnectRemote_FailedRelay(t *testing.T) {
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
 	rc.Derived.RelaySocket = filepath.Join(t.TempDir(), "r.sock")
-	err := connectRemote(context.Background(), rc)
+	err := connectRemote(context.Background(), rc, nil)
 	if err == nil {
 		t.Error("expected error when relay check fails")
 	}
@@ -221,7 +221,7 @@ func TestConnectRemote_AutoGeneratePort(t *testing.T) {
 	cfgContent := "default_context: test\ncontexts:\n  test:\n    role: remote\n    gate:\n      hostname: gw.example.com\n    relay:\n      remote_port: 0\n"
 	os.WriteFile(cfgPath, []byte(cfgContent), 0644)
 
-	err := connectRemote(context.Background(), rc)
+	err := connectRemote(context.Background(), rc, nil)
 	if err != nil {
 		t.Errorf("connectRemote with port 0: %v", err)
 	}
@@ -265,7 +265,7 @@ exit 0
 	os.WriteFile(filepath.Join(binDir, "ssh"), []byte(script), 0755)
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
-	err := connectRemote(context.Background(), rc)
+	err := connectRemote(context.Background(), rc, nil)
 	if err == nil {
 		t.Fatal("expected error when port is in use")
 	}
@@ -400,7 +400,7 @@ exit 0
 	os.WriteFile(filepath.Join(binDir, "ssh"), []byte(script), 0755)
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
-	err := connectRemote(context.Background(), rc)
+	err := connectRemote(context.Background(), rc, nil)
 	if err != nil {
 		t.Fatalf("connectRemote: %v", err)
 	}

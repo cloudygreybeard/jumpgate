@@ -19,8 +19,14 @@ func OpenControlMaster(ctx context.Context, host string, extraArgs ...string) er
 // RunRelayForeground runs the relay SSH session in the foreground (blocking).
 // Used on Windows where ControlMaster is unavailable and every SSH command
 // requires separate authentication, so we run a single clean session.
-func RunRelayForeground(ctx context.Context, host string) error {
-	args := []string{"-N", host}
+// relayPort is passed explicitly via -R so the tunnel works even when the
+// SSH config was generated before the port was auto-assigned.
+func RunRelayForeground(ctx context.Context, host string, relayPort int) error {
+	args := []string{"-N"}
+	if relayPort > 0 {
+		args = append(args, "-R", fmt.Sprintf("%d:localhost:22", relayPort))
+	}
+	args = append(args, host)
 	slog.Debug("ssh", "op", "relay-foreground", "args", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Stdin = os.Stdin

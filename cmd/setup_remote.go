@@ -33,12 +33,26 @@ configuration over the tunnel.`,
 			ctxName = args[0]
 		}
 
-		rc, err := loadResolvedContext(ctxName)
+		cfg, rc, err := loadConfigAndContext(ctxName)
 		if err != nil {
 			return err
 		}
 
+		portBefore := rc.Context.Relay.RemotePort
+
 		remoteCfg := bootstrap.RemoteConfig(rc.Derived.ContextName, &rc.Context)
+
+		if rc.Context.Relay.RemotePort != portBefore {
+			fmt.Printf("Relay [%s]: assigned port %d\n", rc.Name, rc.Context.Relay.RemotePort)
+			if ctxCfg, ok := cfg.Contexts[rc.Name]; ok {
+				ctxCfg.Relay.RemotePort = rc.Context.Relay.RemotePort
+				cfg.Contexts[rc.Name] = ctxCfg
+			}
+			if err := persistPort(rc); err != nil {
+				slog.Warn("could not persist relay port to local config", "error", err)
+			}
+		}
+
 		b64, err := bootstrap.Encode(remoteCfg)
 		if err != nil {
 			return fmt.Errorf("encoding bootstrap payload: %w", err)
@@ -209,6 +223,18 @@ func runSetupRemote(cmd *cobra.Command, rc *config.ResolvedContext) error {
 	fmt.Println()
 	fmt.Printf("Remote [%s] is fully set up.\n", rc.Name)
 	return nil
+}
+
+func persistPort(rc *config.ResolvedContext) error {
+	configPath := filepath.Join(rc.Derived.ConfigDir, "config.yaml")
+	_, doc, err := config.LoadRaw(configPath)
+	if err != nil {
+		return err
+	}
+	if err := config.SetContext(doc, rc.Name, rc.Context); err != nil {
+		return err
+	}
+	return config.SaveRaw(configPath, doc)
 }
 
 func marshalRemoteConfig(cfg *config.Config) ([]byte, error) {

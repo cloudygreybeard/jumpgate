@@ -6,17 +6,27 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math/rand"
 
 	"github.com/cloudygreybeard/jumpgate/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
 // RemoteConfig builds a minimal remote-role config from a local context.
+// If relay remote_port is 0 (auto), a random ephemeral port is assigned
+// and written back to the source context so both sides agree on the port.
 func RemoteConfig(contextName string, ctx *config.Context) *config.Config {
 	uid := ctx.UID
 	if uid == "" {
 		uid = config.GenerateUID()
 	}
+
+	relayPort := ctx.Relay.RemotePort
+	if relayPort == 0 {
+		relayPort = rand.Intn(16384) + 49152
+		ctx.Relay.RemotePort = relayPort
+	}
+
 	return &config.Config{
 		DefaultContext: contextName,
 		Contexts: map[string]config.Context{
@@ -32,7 +42,7 @@ func RemoteConfig(contextName string, ctx *config.Context) *config.Config {
 					User: ctx.Auth.User,
 				},
 				Relay: config.RelayConfig{
-					RemotePort: ctx.Relay.RemotePort,
+					RemotePort: relayPort,
 				},
 			},
 		},

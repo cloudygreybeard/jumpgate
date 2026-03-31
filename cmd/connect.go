@@ -37,6 +37,10 @@ in the ephemeral range (49152-65535) is generated and persisted on first use.`,
 
 		if flagRelayPort > 0 {
 			rc.Context.Relay.RemotePort = flagRelayPort
+			if ctxCfg, ok := cfg.Contexts[rc.Name]; ok {
+				ctxCfg.Relay.RemotePort = flagRelayPort
+				cfg.Contexts[rc.Name] = ctxCfg
+			}
 		}
 
 		return connect.Connect(ctx, rc, cfg)
