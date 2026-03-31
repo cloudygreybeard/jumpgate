@@ -147,8 +147,12 @@ func writeRemoteConfig(b *strings.Builder, data TemplateData, snippets map[strin
 func writeLocalGateFallback(b *strings.Builder, d TemplateData) {
 	fmt.Fprintf(b, "Host %s-gate gate\n", d.Context)
 	fmt.Fprintf(b, "  HostName %s\n", d.Hostname)
-	fmt.Fprintf(b, "  User %s\n", d.User)
-	fmt.Fprintf(b, "  Port %d\n", d.Port)
+	if d.User != "" {
+		fmt.Fprintf(b, "  User %s\n", d.User)
+	}
+	if d.Port > 0 {
+		fmt.Fprintf(b, "  Port %d\n", d.Port)
+	}
 	fmt.Fprintf(b, "  GSSAPIAuthentication yes\n")
 	fmt.Fprintf(b, "  GSSAPIDelegateCredentials no\n")
 	fmt.Fprintf(b, "  PreferredAuthentications gssapi-with-mic,keyboard-interactive\n")
@@ -162,9 +166,15 @@ func writeLocalGateFallback(b *strings.Builder, d TemplateData) {
 func writeLocalRemoteFallback(b *strings.Builder, d TemplateData) {
 	fmt.Fprintf(b, "Host %s remote\n", d.Context)
 	fmt.Fprintf(b, "  HostName localhost\n")
-	fmt.Fprintf(b, "  User %s\n", d.RemoteUser)
-	fmt.Fprintf(b, "  Port %d\n", d.RelayPort)
-	fmt.Fprintf(b, "  IdentityFile %s\n", d.RemoteKey)
+	if d.RemoteUser != "" {
+		fmt.Fprintf(b, "  User %s\n", d.RemoteUser)
+	}
+	if d.RelayPort > 0 {
+		fmt.Fprintf(b, "  Port %d\n", d.RelayPort)
+	}
+	if d.RemoteKey != "" {
+		fmt.Fprintf(b, "  IdentityFile %s\n", d.RemoteKey)
+	}
 	fmt.Fprintf(b, "  AddKeysToAgent yes\n")
 	fmt.Fprintf(b, "  UseKeychain yes\n")
 	fmt.Fprintf(b, "  ProxyJump %s-gate\n", d.Context)
@@ -174,8 +184,12 @@ func writeLocalRemoteFallback(b *strings.Builder, d TemplateData) {
 func writeRemoteGateFallback(b *strings.Builder, d TemplateData) {
 	fmt.Fprintf(b, "Host %s-gate gate\n", d.Context)
 	fmt.Fprintf(b, "  HostName %s\n", d.Hostname)
-	fmt.Fprintf(b, "  User %s\n", d.User)
-	fmt.Fprintf(b, "  Port %d\n", d.Port)
+	if d.User != "" {
+		fmt.Fprintf(b, "  User %s\n", d.User)
+	}
+	if d.Port > 0 {
+		fmt.Fprintf(b, "  Port %d\n", d.Port)
+	}
 	fmt.Fprintf(b, "  GSSAPIAuthentication yes\n")
 	fmt.Fprintf(b, "  GSSAPIDelegateCredentials no\n")
 	fmt.Fprintf(b, "  ServerAliveInterval 30\n")
@@ -185,12 +199,18 @@ func writeRemoteGateFallback(b *strings.Builder, d TemplateData) {
 func writeRemoteRelayFallback(b *strings.Builder, d TemplateData) {
 	fmt.Fprintf(b, "Host %s-relay relay\n", d.Context)
 	fmt.Fprintf(b, "  HostName %s\n", d.Hostname)
-	fmt.Fprintf(b, "  User %s\n", d.User)
-	fmt.Fprintf(b, "  Port %d\n", d.Port)
+	if d.User != "" {
+		fmt.Fprintf(b, "  User %s\n", d.User)
+	}
+	if d.Port > 0 {
+		fmt.Fprintf(b, "  Port %d\n", d.Port)
+	}
 	fmt.Fprintf(b, "  GSSAPIAuthentication yes\n")
 	fmt.Fprintf(b, "  GSSAPIDelegateCredentials no\n")
 	fmt.Fprintf(b, "  ServerAliveInterval 30\n")
-	fmt.Fprintf(b, "  RemoteForward %d localhost:22\n", d.RelayPort)
+	if d.RelayPort > 0 {
+		fmt.Fprintf(b, "  RemoteForward %d localhost:22\n", d.RelayPort)
+	}
 	fmt.Fprintf(b, "  ExitOnForwardFailure yes\n")
 	b.WriteString("\n")
 }
