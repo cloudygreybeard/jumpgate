@@ -53,14 +53,14 @@ try {
 
     $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
     if ($UserPath -notlike "*$InstallDir*") {
-        Write-Host "Add $InstallDir to your PATH:"
-        Write-Host "  [Environment]::SetEnvironmentVariable('PATH', `"$InstallDir;`$env:PATH`", 'User')"
+        [Environment]::SetEnvironmentVariable("PATH", "$InstallDir;$UserPath", "User")
+        $env:PATH = "$InstallDir;$env:PATH"
+        Write-Host "Added $InstallDir to your PATH."
         Write-Host ""
     }
 
     Write-Host "Next steps:"
-    Write-Host "  jumpgate init --paste       # bootstrap from a local jumpgate payload"
-    Write-Host "  jumpgate init --from <dir>  # init from a site pack"
+    Write-Host "  jumpgate bootstrap          # one-command remote setup (paste payload when prompted)"
     Write-Host "  jumpgate --help"
 } finally {
     Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
