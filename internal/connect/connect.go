@@ -130,19 +130,32 @@ func connectRemote(ctx context.Context, rc *config.ResolvedContext) error {
 		}
 	}
 
+	if runtime.GOOS == "windows" {
+		return connectRemoteWindows(ctx, rc)
+	}
+	return connectRemoteUnix(ctx, rc)
+}
+
+// connectRemoteWindows runs the relay as a single foreground SSH session.
+// Without ControlMaster, every SSH command requires separate authentication,
+// so we skip the port check and marker write and run one clean session.
+func connectRemoteWindows(ctx context.Context, rc *config.ResolvedContext) error {
+	relayHost := rc.Derived.RelayHost
+
+	fmt.Printf("Relay [%s]: connecting to %s (RemoteForward %d -> localhost:22)...\n",
+		rc.Name, relayHost, rc.Context.Relay.RemotePort)
+	fmt.Println("  (foreground session — Ctrl+C to close)")
+
+	return internalssh.RunRelayForeground(ctx, relayHost)
+}
+
+func connectRemoteUnix(ctx context.Context, rc *config.ResolvedContext) error {
 	socketPath := rc.Derived.RelaySocket
 	relayHost := rc.Derived.RelayHost
-	isWindows := runtime.GOOS == "windows"
 
-	if !isWindows && socketExists(socketPath) {
+	if socketExists(socketPath) {
 		if err := internalssh.CheckSocket(ctx, relayHost, socketPath); err == nil {
 			fmt.Printf("Relay [%s]: already active\n", rc.Name)
-			return nil
-		}
-	}
-	if isWindows && internalssh.RelayPID != 0 {
-		if err := internalssh.CheckSocket(ctx, relayHost, socketPath); err == nil {
-			fmt.Printf("Relay [%s]: already active (pid %d)\n", rc.Name, internalssh.RelayPID)
 			return nil
 		}
 	}
@@ -159,16 +172,10 @@ func connectRemote(ctx context.Context, rc *config.ResolvedContext) error {
 		return fmt.Errorf("opening relay: %w", err)
 	}
 
-	if isWindows {
-		if err := waitForRelayProcess(ctx, rc.Name); err != nil {
-			return err
-		}
-	} else {
-		if err := internalssh.CheckSocket(ctx, relayHost, socketPath); err != nil {
-			return fmt.Errorf("relay [%s]: failed to connect", rc.Name)
-		}
-		fmt.Printf("Relay [%s]: active\n", rc.Name)
+	if err := internalssh.CheckSocket(ctx, relayHost, socketPath); err != nil {
+		return fmt.Errorf("relay [%s]: failed to connect", rc.Name)
 	}
+	fmt.Printf("Relay [%s]: active\n", rc.Name)
 
 	markerID := rc.Context.UID
 	if markerID == "" {
@@ -224,48 +231,6 @@ func discoverRelayPort(ctx context.Context, rc *config.ResolvedContext, cfg *con
 	}
 
 	return true
-}
-
-// waitForRelayProcess monitors the background SSH process on Windows, failing
-// fast if it exits (auth failure, bad host, MAC error, etc.) and only
-// declaring success once the process has survived a stabilisation window,
-// ensuring the SSH handshake has completed.
-func waitForRelayProcess(ctx context.Context, name string) error {
-	exited := internalssh.RelayExited()
-	if exited == nil {
-		return fmt.Errorf("relay [%s]: no process started", name)
-	}
-
-	const overallTimeout = 60 * time.Second
-	const stabiliseWindow = 5 * time.Second
-	const checkInterval = 250 * time.Millisecond
-
-	deadline := time.After(overallTimeout)
-	tick := time.NewTicker(checkInterval)
-	defer tick.Stop()
-
-	start := time.Now()
-	for {
-		select {
-		case err := <-exited:
-			if err != nil {
-				return fmt.Errorf("relay [%s]: SSH process exited (%w)", name, err)
-			}
-			return fmt.Errorf("relay [%s]: SSH process exited unexpectedly", name)
-		case <-deadline:
-			return fmt.Errorf("relay [%s]: timed out waiting for SSH connection (%s)", name, overallTimeout)
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-tick.C:
-			if internalssh.RelayPID == 0 {
-				return fmt.Errorf("relay [%s]: SSH process exited", name)
-			}
-			if time.Since(start) >= stabiliseWindow {
-				fmt.Printf("Relay [%s]: active (pid %d)\n", name, internalssh.RelayPID)
-				return nil
-			}
-		}
-	}
 }
 
 // persistRelayPort writes the auto-generated relay port back to config.yaml.
