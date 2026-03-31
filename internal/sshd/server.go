@@ -23,6 +23,19 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// BannerPrefix is the prefix of the SSH server version string. The full
+// banner includes the context UID so the local probe can verify it is
+// connecting to the correct remote (e.g. "SSH-2.0-jumpgate-bootstrap_<uid>").
+const BannerPrefix = "jumpgate-bootstrap"
+
+// Banner returns the full SSH server version string for a given context UID.
+func Banner(uid string) string {
+	if uid == "" {
+		return "SSH-2.0-" + BannerPrefix
+	}
+	return "SSH-2.0-" + BannerPrefix + "_" + uid
+}
+
 // Server is a minimal SSH server for bootstrap. It listens on a local
 // port, authenticates with a single authorized public key, and handles
 // exec requests by spawning the platform shell.
@@ -38,8 +51,9 @@ type Server struct {
 
 // New creates a Server that listens on addr, authenticates against the
 // public key in authorizedKeyPath, and presents the host key from
-// hostKeyPath.
-func New(hostKeyPath, authorizedKeyPath, addr string) (*Server, error) {
+// hostKeyPath. The contextUID is included in the SSH banner so the local
+// probe can verify it is connecting to the correct remote.
+func New(hostKeyPath, authorizedKeyPath, addr, contextUID string) (*Server, error) {
 	hostKeyBytes, err := os.ReadFile(hostKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading host key: %w", err)
@@ -59,6 +73,7 @@ func New(hostKeyPath, authorizedKeyPath, addr string) (*Server, error) {
 	}
 
 	cfg := &ssh.ServerConfig{
+		ServerVersion: Banner(contextUID),
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			if bytes.Equal(key.Marshal(), authorizedKey.Marshal()) {
 				slog.Debug("bootstrap-sshd: pubkey accepted", "user", conn.User())

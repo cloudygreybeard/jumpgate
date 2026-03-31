@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -230,7 +231,12 @@ func runBootstrapLocal(cmd *cobra.Command, rc *config.ResolvedContext, cfg *conf
 		slog.Warn("could not regenerate SSH config", "error", err)
 	}
 
-	// 3. Wait for the remote bootstrap server to appear
+	// 3. Clear any stale known_hosts entry for the relay endpoint.
+	// The bootstrap server generates a fresh host key each time, so an old
+	// entry would cause accept-new to reject the connection.
+	clearStaleHostKey(rc.Context.Relay.RemotePort)
+
+	// 4. Wait for the remote bootstrap server to appear
 	remoteHost := rc.Derived.RemoteHost
 	fmt.Println()
 	fmt.Printf("Waiting for remote [%s] to connect (relay port %d)...\n",
@@ -238,7 +244,7 @@ func runBootstrapLocal(cmd *cobra.Command, rc *config.ResolvedContext, cfg *conf
 	fmt.Println("  Run 'jumpgate bootstrap' on the remote and authenticate to the bastion.")
 	fmt.Println()
 
-	if err := waitForRemote(ctx, remoteHost); err != nil {
+	if err := waitForRemote(ctx, remoteHost, rc.Context.UID); err != nil {
 		return err
 	}
 
@@ -249,31 +255,51 @@ func runBootstrapLocal(cmd *cobra.Command, rc *config.ResolvedContext, cfg *conf
 	return runSetupRemote(cmd, rc)
 }
 
-// waitForRemote polls until the remote bootstrap server is reachable via SSH,
-// using accept-new for host keys and echo instead of true for PowerShell
-// compatibility. No hooks are invoked during polling.
-func waitForRemote(ctx context.Context, remoteHost string) error {
+// waitForRemote polls until the remote bootstrap server is reachable.
+// It checks the SSH banner to confirm the embedded bootstrap server for
+// the expected context UID is listening (not regular sshd or a different
+// context's bootstrap). Stale known_hosts entries are cleared before this
+// is called. No hooks are invoked during polling.
+func waitForRemote(ctx context.Context, remoteHost, expectedUID string) error {
 	const maxWait = 10 * time.Minute
 	pollCtx, cancel := context.WithTimeout(ctx, maxWait)
 	defer cancel()
+
+	expectedBanner := sshd.BannerPrefix + "_" + expectedUID
 
 	attempt := 0
 	for {
 		probeCtx, probeCancel := context.WithTimeout(pollCtx, 10*time.Second)
 		probe := exec.CommandContext(probeCtx, "ssh",
+			"-v",
 			"-o", "BatchMode=yes",
 			"-o", "ConnectTimeout=5",
 			"-o", "StrictHostKeyChecking=accept-new",
 			remoteHost, "echo ok",
 		)
+		var stderr bytes.Buffer
+		probe.Stderr = &stderr
 		err := probe.Run()
 		probeCancel()
 
-		if err == nil {
+		stderrStr := stderr.String()
+		bannerMatch := checkBanner(stderrStr, expectedBanner)
+
+		switch {
+		case bannerMatch && err == nil:
 			return nil
+		case bannerMatch && err != nil:
+			slog.Debug("bootstrap probe: banner matched but exec failed", "error", err)
+		case !bannerMatch && strings.Contains(stderrStr, sshd.BannerPrefix):
+			return fmt.Errorf("remote [%s] is running a bootstrap server for a different context\n"+
+				"  Expected UID %s but got a different one", remoteHost, expectedUID)
+		case !bannerMatch && err == nil:
+			return fmt.Errorf("remote [%s] is running regular sshd, not the bootstrap server\n"+
+				"  Use 'jumpgate setup remote' to push config to an already-running remote", remoteHost)
 		}
 
 		attempt++
+		slog.Debug("bootstrap probe failed", "attempt", attempt, "error", err, "stderr", strings.TrimSpace(stderrStr))
 		delay := bootstrapPollDelay(attempt)
 		fmt.Printf("\r  waiting... attempt %d (next in %s)  ", attempt, delay)
 
@@ -288,6 +314,30 @@ func waitForRemote(ctx context.Context, remoteHost string) error {
 			return fmt.Errorf("timed out waiting for remote (%s)", maxWait)
 		case <-timer.C:
 		}
+	}
+}
+
+// checkBanner looks for the expected bootstrap banner in SSH verbose output.
+// The -v flag emits lines like "Remote protocol version 2.0, remote software
+// version jumpgate-bootstrap_<uid>" or "compat_banner: no match:
+// jumpgate-bootstrap_<uid>".
+func checkBanner(sshVerbose, expectedBanner string) bool {
+	return strings.Contains(sshVerbose, expectedBanner)
+}
+
+// clearStaleHostKey removes any known_hosts entry for [localhost]:port.
+// The bootstrap server generates a new host key on each init, so a leftover
+// entry from a previous bootstrap would cause StrictHostKeyChecking=accept-new
+// to reject the connection with "REMOTE HOST IDENTIFICATION HAS CHANGED".
+func clearStaleHostKey(port int) {
+	target := fmt.Sprintf("[localhost]:%d", port)
+	cmd := exec.Command("ssh-keygen", "-R", target)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Run(); err != nil {
+		slog.Debug("ssh-keygen -R (no-op if no entry existed)", "target", target, "error", err)
+	} else {
+		slog.Debug("cleared stale known_hosts entry", "target", target)
 	}
 }
 
@@ -319,7 +369,7 @@ func runBootstrapRemote(parentCtx context.Context, rc *config.ResolvedContext) e
 	}
 
 	listenAddr := fmt.Sprintf("127.0.0.1:%d", bootstrapSSHPort)
-	srv, err := sshd.New(hostKeyPath, authKeyPath, listenAddr)
+	srv, err := sshd.New(hostKeyPath, authKeyPath, listenAddr, rc.Context.UID)
 	if err != nil {
 		return fmt.Errorf("starting bootstrap SSH server: %w", err)
 	}

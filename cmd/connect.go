@@ -8,7 +8,7 @@ import (
 var flagRelayPort int
 
 var connectCmd = &cobra.Command{
-	
+
 	Use:   "connect [CONTEXT]",
 	Short: "Open gate session, authenticate, wait for remote",
 	Long: `On local: opens the gate ControlMaster, authenticates via Kerberos if

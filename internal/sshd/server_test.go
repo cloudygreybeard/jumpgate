@@ -54,7 +54,7 @@ func setupTestKeys(t *testing.T) (string, string, ssh.Signer) {
 func TestServerExec(t *testing.T) {
 	hostKeyPath, authKeyPath, clientSigner := setupTestKeys(t)
 
-	srv, err := New(hostKeyPath, authKeyPath, "127.0.0.1:0")
+	srv, err := New(hostKeyPath, authKeyPath, "127.0.0.1:0", "test-uid")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestServerExec(t *testing.T) {
 func TestServerRejectsUnauthorizedKey(t *testing.T) {
 	hostKeyPath, authKeyPath, _ := setupTestKeys(t)
 
-	srv, err := New(hostKeyPath, authKeyPath, "127.0.0.1:0")
+	srv, err := New(hostKeyPath, authKeyPath, "127.0.0.1:0", "test-uid")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestServerRejectsUnauthorizedKey(t *testing.T) {
 func TestServerFingerprint(t *testing.T) {
 	hostKeyPath, authKeyPath, _ := setupTestKeys(t)
 
-	srv, err := New(hostKeyPath, authKeyPath, "127.0.0.1:0")
+	srv, err := New(hostKeyPath, authKeyPath, "127.0.0.1:0", "test-uid")
 	if err != nil {
 		t.Fatal(err)
 	}
