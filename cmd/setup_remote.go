@@ -21,13 +21,15 @@ var setupRemoteInitCmd = &cobra.Command{
 	Short: "Generate a bootstrap payload for initialising the remote end",
 	Long: `Generate a compact base64 string containing the minimal remote-role
 config for a given context. The string is designed to be copied via
-clipboard (e.g. through Windows App) and pasted into the remote's
-'jumpgate init --paste' command.
+clipboard (e.g. through Windows App) and pasted when 'jumpgate bootstrap'
+prompts on the remote.
+
+Note: 'jumpgate bootstrap' on the local side generates this payload
+automatically and waits for the remote — this command is an alternative
+for scripted or manual workflows.
 
 The payload contains only gate hostname, port, auth user, relay port,
-and the context name — enough for the remote to open a relay tunnel.
-Once the relay is up, 'jumpgate setup remote' can push the full
-configuration over the tunnel.`,
+and the context name — enough for the remote to open a relay tunnel.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctxName := flagContext
@@ -84,9 +86,11 @@ tunnel. This pushes the complete remote config, hooks, SSH snippets,
 and Windows integration scripts, then runs 'jumpgate setup ssh' on the
 remote to regenerate its SSH config.
 
-Requires the remote to be reachable via 'ssh <context>'. Typically run
-after 'jumpgate connect' has established the tunnel following an
-initial bootstrap with 'jumpgate init --paste'.`,
+Note: 'jumpgate bootstrap' on the local side runs this automatically
+after detecting the remote — this command is an alternative for manual
+or incremental updates.
+
+Requires the remote to be reachable via 'ssh <context>'.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctxName := flagContext

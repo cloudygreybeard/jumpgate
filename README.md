@@ -59,7 +59,11 @@ make install
 ## Quick start
 
 ```bash
-# One-time setup from a site pack (3 commands to connect)
+# Bootstrap a new remote (one command on each side)
+jumpgate bootstrap               # local: payload + auth + wait + push config
+jumpgate bootstrap               # remote: paste payload + embedded server + relay
+
+# One-time setup from a site pack
 jumpgate init --from ~/my-site-pack   # render config, hooks, SSH — all in one
 jumpgate connect                      # gate + auth + wait for remote
 
@@ -112,17 +116,25 @@ jumpgate config export [CONTEXT]     Export a context as a site pack directory
 jumpgate config migrate              Check config format, print guidance
 ```
 
+### Bootstrap
+
+```
+jumpgate bootstrap [CONTEXT]         One-command setup (works on both local and remote)
+jumpgate bootstrap --reinit          Re-prompt for bootstrap payload on remote
+jumpgate bootstrap --server-only     Run embedded SSH server only (remote, no relay)
+```
+
 ### Setup
 
 ```
 jumpgate init                        Bootstrap config from defaults
 jumpgate init --from <dir>           Bootstrap from a site pack directory
-jumpgate init --paste                Bootstrap remote from pasted payload
+jumpgate init --paste                Bootstrap remote from pasted payload (alt path)
 jumpgate setup                       Interactive first-time setup
 jumpgate setup config                Create config dir + hooks
 jumpgate setup ssh                   Generate SSH configs from templates
 jumpgate setup credentials           Run setup-credentials hook
-jumpgate setup remote-init [CTX]     Generate bootstrap payload for a remote
+jumpgate setup remote-init [CTX]     Generate bootstrap payload for a remote (alt path)
 jumpgate setup remote [CTX]          Push full config/hooks to remote over SSH
 ```
 
@@ -294,58 +306,71 @@ jumpgate connect
 
 ## Remote bootstrap
 
-Setting up the remote end of a jumpgate connection is a two-phase process
-using clipboard paste (e.g. via Windows App).
+Setting up a new remote is a single command on each side. The local
+generates a bootstrap payload, authenticates, and waits. The remote
+pastes the payload, starts a temporary embedded SSH server, and opens
+a relay tunnel. When the local detects the remote, it pushes the full
+config automatically.
 
-### Phase 1: Bootstrap (get the relay running)
-
-On the **local** workstation, generate a bootstrap payload:
+### On the local workstation
 
 ```bash
-jumpgate setup remote-init myhost
+jumpgate bootstrap
 ```
 
-This prints a compact base64 string (~400 chars) containing the minimal
-remote-role config. Copy it to the clipboard.
+This generates a compact base64 payload, prints install instructions for
+the remote, authenticates (gate + Kerberos), and waits for the remote to
+appear on the relay.
 
-On the **remote**, install jumpgate and paste the payload. This works from
-WSL, native Linux, or Windows PowerShell:
+### On the remote
+
+Install jumpgate and run `jumpgate bootstrap`. When prompted, paste the
+payload string displayed on the local side.
 
 ```bash
 # Linux / WSL
 curl -sL https://github.com/cloudygreybeard/jumpgate/releases/latest/download/install.sh | sh
-jumpgate init --paste
-# paste the base64 string, press Enter
-jumpgate connect
+jumpgate bootstrap
 ```
 
 ```powershell
 # Windows PowerShell (pre-WSL bootstrap)
 irm https://github.com/cloudygreybeard/jumpgate/releases/latest/download/install.ps1 | iex
-jumpgate init --paste
-# paste the base64 string, press Enter
-jumpgate connect
+jumpgate bootstrap
 ```
 
-On Windows, `jumpgate connect` runs the relay as a background process
-without ControlMaster (which Windows OpenSSH does not support). The process
-is monitored directly: if SSH exits (auth failure, bad host key), jumpgate
-reports the error immediately rather than waiting for a timeout.
+The remote starts a minimal embedded SSH server on `localhost:2222`
+(public key auth only, exec-only, loopback-bound) and opens a relay
+tunnel through the gate. On Windows, the installer automatically adds
+`$HOME\bin` to PATH.
 
-The remote now has a relay tunnel open through the gate.
+### What happens next
 
-### Phase 2: Full orchestration (push everything)
+The local detects the remote through the relay and pushes the full
+configuration, hooks, SSH snippets, and Windows integration scripts.
+Once complete, both sides can use `jumpgate connect` for daily use.
 
-Once the relay is up and `jumpgate connect` succeeds on the local side,
-push the complete config, hooks, and Windows integration:
+The embedded server is a one-time bootstrap mechanism — once sshd is
+installed on the remote, `jumpgate connect` is used instead.
+
+### Alternate path (manual)
+
+The `jumpgate bootstrap` flow combines several standalone commands that
+can also be used individually:
 
 ```bash
+# Local: generate payload only
+jumpgate setup remote-init myhost
+
+# Remote: paste payload + start relay separately
+jumpgate init --paste
+jumpgate connect          # if sshd is available
+# or
+jumpgate bootstrap        # if no sshd yet (embedded server)
+
+# Local: push config only (after relay is up)
 jumpgate setup remote myhost
 ```
-
-This pushes the full remote config, hooks, SSH snippets, and Windows
-Terminal shortcuts over the SSH tunnel, then runs `jumpgate setup ssh`
-on the remote.
 
 ## Config import and export
 
