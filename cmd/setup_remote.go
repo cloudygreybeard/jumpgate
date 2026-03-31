@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/cloudygreybeard/jumpgate/internal/bootstrap"
 	"github.com/cloudygreybeard/jumpgate/internal/config"
@@ -62,13 +64,13 @@ configuration over the tunnel.`,
 		fmt.Println()
 		fmt.Println("On the remote, install jumpgate then run:")
 		fmt.Println()
-		fmt.Println("  jumpgate init --paste")
+		fmt.Println("  jumpgate bootstrap")
 		fmt.Println()
 		fmt.Println("When prompted, paste this string:")
 		fmt.Println()
 		fmt.Println(b64)
 		fmt.Println()
-		fmt.Printf("Then run 'jumpgate connect' on the remote to open the relay.\n")
+		fmt.Println("(If sshd is already running, use 'jumpgate init --paste' + 'jumpgate connect' instead.)")
 
 		return nil
 	},
@@ -110,19 +112,22 @@ func runSetupRemote(cmd *cobra.Command, rc *config.ResolvedContext) error {
 	ctx := cmd.Context()
 	remoteHost := rc.Derived.RemoteHost
 	configDir := rc.Derived.ConfigDir
+	verbose := flagVerbose > 0
 
 	fmt.Printf("=== Setup remote [%s] via %s ===\n", rc.Name, remoteHost)
 
 	// Verify remote is reachable
+	stepStart := time.Now()
 	fmt.Print("  Checking remote connectivity... ")
-	probe := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", remoteHost, "true")
+	probe := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", remoteHost, "echo ok")
 	if err := probe.Run(); err != nil {
 		fmt.Println("FAILED")
 		return fmt.Errorf("remote %s is not reachable -- is the relay tunnel up? (jumpgate connect)", remoteHost)
 	}
-	fmt.Println("OK")
+	printStepDone(verbose, stepStart)
 
 	// Generate and push remote config
+	stepStart = time.Now()
 	fmt.Print("  Pushing remote config... ")
 	remoteCfg := bootstrap.RemoteConfig(rc.Derived.ContextName, &rc.Context)
 	tmpFile, err := os.CreateTemp("", "jumpgate-remote-config-*.yaml")
@@ -143,86 +148,125 @@ func runSetupRemote(cmd *cobra.Command, rc *config.ResolvedContext) error {
 	if err := scpToRemote(ctx, tmpFile.Name(), remoteHost, ".config/jumpgate/config.yaml"); err != nil {
 		return fmt.Errorf("pushing config: %w", err)
 	}
-	fmt.Println("OK")
+	printStepDone(verbose, stepStart)
 
 	// Push hooks (if any exist locally)
 	hooksDir := filepath.Join(configDir, "hooks")
 	if entries, err := os.ReadDir(hooksDir); err == nil && len(entries) > 0 {
+		stepStart = time.Now()
 		fmt.Print("  Pushing hooks... ")
 		_ = sshRun(ctx, remoteHost, "mkdir -p .config/jumpgate/hooks")
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			src := filepath.Join(hooksDir, e.Name())
-			dst := ".config/jumpgate/hooks/" + e.Name()
-			if err := scpToRemote(ctx, src, remoteHost, dst); err != nil {
-				slog.Warn("could not push hook", "file", e.Name(), "error", err)
-			}
-		}
-		// Make hooks executable on remote
+		pushFiles(ctx, verbose, entries, hooksDir, ".config/jumpgate/hooks/", remoteHost)
 		_ = sshRun(ctx, remoteHost, "chmod +x .config/jumpgate/hooks/*")
-		fmt.Println("OK")
+		printStepDone(verbose, stepStart)
 	}
 
 	// Push SSH snippets (if any exist locally)
 	snippetsDir := filepath.Join(configDir, "ssh", "snippets")
 	if entries, err := os.ReadDir(snippetsDir); err == nil && len(entries) > 0 {
+		stepStart = time.Now()
 		fmt.Print("  Pushing SSH snippets... ")
 		_ = sshRun(ctx, remoteHost, "mkdir -p .config/jumpgate/ssh/snippets")
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			src := filepath.Join(snippetsDir, e.Name())
-			dst := ".config/jumpgate/ssh/snippets/" + e.Name()
-			if err := scpToRemote(ctx, src, remoteHost, dst); err != nil {
-				slog.Warn("could not push snippet", "file", e.Name(), "error", err)
-			}
-		}
-		fmt.Println("OK")
+		pushFiles(ctx, verbose, entries, snippetsDir, ".config/jumpgate/ssh/snippets/", remoteHost)
+		printStepDone(verbose, stepStart)
 	}
 
 	// Push Windows integration scripts (if any exist locally)
 	windowsDir := filepath.Join(configDir, "windows")
 	if entries, err := os.ReadDir(windowsDir); err == nil && len(entries) > 0 {
+		stepStart = time.Now()
 		fmt.Print("  Pushing Windows scripts... ")
 		_ = sshRun(ctx, remoteHost, "mkdir -p jumpgate/windows")
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			src := filepath.Join(windowsDir, e.Name())
-			dst := "jumpgate/windows/" + e.Name()
-			if err := scpToRemote(ctx, src, remoteHost, dst); err != nil {
-				slog.Warn("could not push windows script", "file", e.Name(), "error", err)
-			}
-		}
-		fmt.Println("OK")
+		pushFiles(ctx, verbose, entries, windowsDir, "jumpgate/windows/", remoteHost)
+		printStepDone(verbose, stepStart)
 	}
 
-	// Run jumpgate setup ssh on the remote
+	// Run jumpgate setup ssh on the remote.
+	// Try the PATH first, then common install locations for fresh systems
+	// where ~/bin may not be in PATH yet (e.g. bootstrap via PowerShell).
+	stepStart = time.Now()
 	fmt.Print("  Running 'jumpgate setup ssh' on remote... ")
-	if err := sshRun(ctx, remoteHost, "jumpgate setup ssh"); err != nil {
-		return fmt.Errorf("remote setup ssh failed: %w", err)
+	setupErr := sshRun(ctx, remoteHost, "jumpgate setup ssh")
+	if setupErr != nil {
+		slog.Debug("jumpgate not in PATH, trying ~/bin")
+		// PowerShell needs & for path invocation; sh -c handles ~/bin natively
+		setupErr = sshRun(ctx, remoteHost, `& "$HOME\bin\jumpgate" setup ssh`)
 	}
-	fmt.Println("OK")
+	if setupErr != nil {
+		setupErr = sshRun(ctx, remoteHost, "$HOME/bin/jumpgate setup ssh")
+	}
+	if setupErr != nil {
+		return fmt.Errorf("remote setup ssh failed: %w", setupErr)
+	}
+	printStepDone(verbose, stepStart)
 
 	// Install Windows shortcuts (if install-shortcut.ps1 exists on remote)
 	if err := sshRun(ctx, remoteHost, "test -f jumpgate/windows/install-shortcut.ps1"); err == nil {
+		stepStart = time.Now()
 		fmt.Print("  Installing Windows shortcuts... ")
 		installCmd := `winpath=$(wslpath -w ~/jumpgate/windows/install-shortcut.ps1) && /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -ExecutionPolicy Bypass -File "$winpath"`
 		if err := sshRun(ctx, remoteHost, installCmd); err != nil {
 			slog.Warn("Windows shortcut installation failed (non-fatal)", "error", err)
 			fmt.Println("SKIPPED")
 		} else {
-			fmt.Println("OK")
+			printStepDone(verbose, stepStart)
 		}
 	}
 
 	fmt.Println()
 	fmt.Printf("Remote [%s] is fully set up.\n", rc.Name)
 	return nil
+}
+
+func printStepDone(verbose bool, start time.Time) {
+	if verbose {
+		fmt.Printf("OK (%s)\n", time.Since(start).Truncate(time.Millisecond))
+	} else {
+		fmt.Println("OK")
+	}
+}
+
+func formatSize(n int64) string {
+	switch {
+	case n >= 1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	case n >= 1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+func pushFiles(ctx context.Context, verbose bool, entries []os.DirEntry, srcDir, dstPrefix, remoteHost string) {
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		src := filepath.Join(srcDir, e.Name())
+		dst := dstPrefix + e.Name()
+
+		if verbose {
+			info, _ := e.Info()
+			size := ""
+			if info != nil {
+				size = " " + formatSize(info.Size())
+			}
+			fmt.Printf("\n    → %s%s... ", e.Name(), size)
+		}
+
+		t := time.Now()
+		if err := scpToRemote(ctx, src, remoteHost, dst); err != nil {
+			if verbose {
+				fmt.Printf("FAILED (%s)\n", err)
+			}
+			slog.Warn("could not push file", "file", e.Name(), "error", err)
+		} else if verbose {
+			fmt.Printf("OK (%s)", time.Since(t).Truncate(time.Millisecond))
+		}
+	}
+	if verbose {
+		fmt.Println()
+	}
 }
 
 func persistPort(rc *config.ResolvedContext) error {
@@ -251,11 +295,27 @@ func scpToRemote(ctx context.Context, localPath, remoteHost, remotePath string) 
 	if dir != "." {
 		_ = sshRun(ctx, remoteHost, "mkdir -p "+dir)
 	}
-	cmd := exec.CommandContext(ctx, "scp", "-q", localPath, remoteHost+":"+remotePath)
-	return cmd.Run()
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "scp", "-O", "-q", localPath, remoteHost+":"+remotePath)
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() > 0 {
+			return fmt.Errorf("%w: %s", err, bytes.TrimSpace(stderr.Bytes()))
+		}
+		return err
+	}
+	return nil
 }
 
 func sshRun(ctx context.Context, remoteHost, command string) error {
+	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", remoteHost, command)
-	return cmd.Run()
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() > 0 {
+			slog.Debug("ssh remote command failed", "command", command, "stderr", stderr.String())
+		}
+		return err
+	}
+	return nil
 }

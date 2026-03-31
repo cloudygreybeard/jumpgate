@@ -14,6 +14,7 @@ import (
 type Config struct {
 	DefaultContext string             `yaml:"default_context"`
 	Contexts       map[string]Context `yaml:"contexts"`
+	AuthorizedKey  string             `yaml:"authorized_key,omitempty" json:"authorized_key,omitempty"`
 }
 
 type Context struct {

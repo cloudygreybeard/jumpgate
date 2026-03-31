@@ -154,7 +154,7 @@ func connectRemoteWindows(ctx context.Context, rc *config.ResolvedContext) error
 		rc.Name, relayHost, rc.Context.Relay.RemotePort)
 	fmt.Println("  (foreground session — Ctrl+C to close)")
 
-	return internalssh.RunRelayForeground(ctx, relayHost, rc.Context.Relay.RemotePort)
+	return internalssh.RunRelayForeground(ctx, relayHost, rc.Context.Relay.RemotePort, 22)
 }
 
 func connectRemoteUnix(ctx context.Context, rc *config.ResolvedContext) error {

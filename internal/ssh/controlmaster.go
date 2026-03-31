@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 func OpenControlMaster(ctx context.Context, host string, extraArgs ...string) error {
@@ -21,10 +22,17 @@ func OpenControlMaster(ctx context.Context, host string, extraArgs ...string) er
 // requires separate authentication, so we run a single clean session.
 // relayPort is passed explicitly via -R so the tunnel works even when the
 // SSH config was generated before the port was auto-assigned.
-func RunRelayForeground(ctx context.Context, host string, relayPort int) error {
-	args := []string{"-N"}
+// localPort is the target port on the local side (22 for sshd, 2222 for
+// the embedded bootstrap SSH server).
+func RunRelayForeground(ctx context.Context, host string, relayPort, localPort int) error {
+	args := []string{
+		"-N",
+		"-o", "ExitOnForwardFailure=yes",
+		"-o", "ServerAliveInterval=30",
+		"-o", "ServerAliveCountMax=3",
+	}
 	if relayPort > 0 {
-		args = append(args, "-R", fmt.Sprintf("%d:localhost:22", relayPort))
+		args = append(args, "-R", fmt.Sprintf("%d:127.0.0.1:%d", relayPort, localPort))
 	}
 	args = append(args, host)
 	slog.Debug("ssh", "op", "relay-foreground", "args", strings.Join(args, " "))
@@ -32,10 +40,45 @@ func RunRelayForeground(ctx context.Context, host string, relayPort int) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ssh relay: %w", err)
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("ssh relay start: %w", err)
 	}
-	return nil
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	// First tick at 10s to confirm auth succeeded, then every 30s.
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	start := time.Now()
+	firstTick := true
+
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				return fmt.Errorf("ssh relay: %w", err)
+			}
+			return nil
+		case <-ticker.C:
+			uptime := time.Since(start).Truncate(time.Second)
+			fmt.Fprintf(os.Stderr, "  relay: alive (%s)\n", uptime)
+			if firstTick {
+				ticker.Reset(30 * time.Second)
+				firstTick = false
+			}
+		case <-ctx.Done():
+			_ = cmd.Process.Signal(os.Interrupt)
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				_ = cmd.Process.Kill()
+				<-done
+			}
+			return nil
+		}
+	}
 }
 
 func OpenRelay(ctx context.Context, host, socketPath string) error {

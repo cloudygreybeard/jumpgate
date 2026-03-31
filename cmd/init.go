@@ -11,6 +11,7 @@ import (
 	"github.com/cloudygreybeard/jumpgate/internal/config"
 	"github.com/cloudygreybeard/jumpgate/internal/setup"
 	"github.com/cloudygreybeard/jumpgate/internal/sitepack"
+	"github.com/cloudygreybeard/jumpgate/internal/sshd"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -173,16 +174,37 @@ func runInitFromPaste(configDir string) error {
 		return fmt.Errorf("creating config dir: %w", err)
 	}
 
-	data, err := yaml.Marshal(cfg)
+	// Strip authorized_key from config before writing config.yaml
+	// (it's stored separately and not needed in the main config file)
+	cfgToWrite := *cfg
+	cfgToWrite.AuthorizedKey = ""
+
+	header := []byte("# Jumpgate remote config -- bootstrapped via: jumpgate init --paste\n\n")
+	cfgData, err := yaml.Marshal(&cfgToWrite)
 	if err != nil {
 		return fmt.Errorf("marshalling config: %w", err)
 	}
-
-	header := []byte("# Jumpgate remote config -- bootstrapped via: jumpgate init --paste\n\n")
-	if err := os.WriteFile(configPath, append(header, data...), 0644); err != nil {
+	if err := os.WriteFile(configPath, append(header, cfgData...), 0644); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	fmt.Printf("  Wrote %s\n", configPath)
+
+	// Write authorized key for bootstrap SSH server
+	if cfg.AuthorizedKey != "" {
+		authKeyPath := filepath.Join(configDir, "authorized_key")
+		if err := os.WriteFile(authKeyPath, []byte(cfg.AuthorizedKey+"\n"), 0644); err != nil {
+			return fmt.Errorf("writing authorized key: %w", err)
+		}
+		fmt.Printf("  Wrote %s\n", authKeyPath)
+	}
+
+	// Generate host key for bootstrap SSH server
+	hostKeyPath := filepath.Join(configDir, "hostkey")
+	fp, err := sshd.GenerateHostKey(hostKeyPath)
+	if err != nil {
+		return fmt.Errorf("generating host key: %w", err)
+	}
+	fmt.Printf("  Generated host key (fingerprint: %s)\n", fp)
 
 	rc, err := cfg.Resolve(ctxName)
 	if err != nil {
@@ -195,7 +217,10 @@ func runInitFromPaste(configDir string) error {
 	}
 
 	fmt.Println()
-	fmt.Println("Ready. Run 'jumpgate connect' to open the relay tunnel.")
+	fmt.Println("Ready. Run 'jumpgate bootstrap' to start the bootstrap relay,")
+	fmt.Println("       or 'jumpgate connect' if sshd is already running.")
+	fmt.Println()
+	fmt.Println("Tip: 'jumpgate bootstrap' does this automatically if no config exists.")
 	return nil
 }
 

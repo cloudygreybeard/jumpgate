@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/cloudygreybeard/jumpgate/internal/config"
 	"gopkg.in/yaml.v3"
@@ -15,6 +18,8 @@ import (
 // RemoteConfig builds a minimal remote-role config from a local context.
 // If relay remote_port is 0 (auto), a random ephemeral port is assigned
 // and written back to the source context so both sides agree on the port.
+// If the local context has a remote.key, the corresponding .pub file is
+// read and included as AuthorizedKey for the bootstrap SSH server.
 func RemoteConfig(contextName string, ctx *config.Context) *config.Config {
 	uid := ctx.UID
 	if uid == "" {
@@ -27,8 +32,22 @@ func RemoteConfig(contextName string, ctx *config.Context) *config.Config {
 		ctx.Relay.RemotePort = relayPort
 	}
 
+	var authorizedKey string
+	if ctx.Remote.Key != "" {
+		pubPath := ctx.Remote.Key + ".pub"
+		if strings.HasPrefix(pubPath, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				pubPath = filepath.Join(home, pubPath[2:])
+			}
+		}
+		if data, err := os.ReadFile(pubPath); err == nil {
+			authorizedKey = strings.TrimSpace(string(data))
+		}
+	}
+
 	return &config.Config{
 		DefaultContext: contextName,
+		AuthorizedKey:  authorizedKey,
 		Contexts: map[string]config.Context{
 			contextName: {
 				UID:  uid,
