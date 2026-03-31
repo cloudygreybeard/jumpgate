@@ -61,7 +61,7 @@ main() {
     esac
 
     echo "Next steps:"
-    echo "  jumpgate init --paste       # bootstrap from a local jumpgate payload"
+    echo "  jumpgate bootstrap          # one-command remote setup (paste payload when prompted)"
     echo "  jumpgate init --from <dir>  # init from a site pack"
     echo "  jumpgate --help"
 }
