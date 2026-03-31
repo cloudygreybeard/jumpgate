@@ -4,11 +4,15 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/cloudygreybeard/jumpgate/internal/auth"
 	"github.com/cloudygreybeard/jumpgate/internal/bootstrap"
 	"github.com/cloudygreybeard/jumpgate/internal/config"
 	internalssh "github.com/cloudygreybeard/jumpgate/internal/ssh"
@@ -24,23 +28,26 @@ var flagBootstrapReinit bool
 
 var bootstrapCmd = &cobra.Command{
 	Use:   "bootstrap [CONTEXT]",
-	Short: "One-time bootstrap: embedded SSH server + relay tunnel",
-	Long: `Start a temporary embedded SSH server and open a relay tunnel
-through the gate. This is a one-time command for initial remote setup,
-before WSL or sshd are installed.
+	Short: "One-time setup for a new remote (run on both sides)",
+	Long: `One-command bootstrap — run on both local and remote.
 
-If no config exists yet, you will be prompted to paste the bootstrap
-payload (generated on the local end by 'jumpgate setup remote-init').
-This replaces the separate 'jumpgate init --paste' step.
+Local (role=local):
+  1. Generates and displays the bootstrap payload + install instructions
+  2. Establishes gate session and authenticates (Kerberos if configured)
+  3. Waits for the remote's bootstrap server to appear on the relay
+  4. Pushes full configuration, hooks, and SSH snippets to the remote
 
-The embedded server listens on localhost:2222 and accepts connections
-authenticated with the public key included in the bootstrap payload.
-The relay tunnel forwards the gate port to this server.
+Remote (role=remote):
+  1. If no config exists, prompts for the bootstrap payload
+  2. Starts a temporary embedded SSH server on localhost:2222
+  3. Opens a relay tunnel through the gate
 
-On the local side, 'jumpgate setup remote' connects through the relay
-as a normal SSH client to push configuration, install WSL, and set up
-sshd. Once sshd is running, use 'jumpgate connect' instead — this
-command is never needed again.`,
+The workflow:
+  Local:   jumpgate bootstrap       (prints payload, waits for remote)
+  Remote:  jumpgate bootstrap       (paste payload, authenticate to bastion)
+  Local:   automatically detects remote, pushes config — done
+
+Once sshd is running on the remote, use 'jumpgate connect' instead.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctxName := flagContext
@@ -51,20 +58,24 @@ command is never needed again.`,
 		configDir := config.DefaultConfigDir()
 		configPath := filepath.Join(configDir, "config.yaml")
 
-		// If no config exists (or --reinit), run the init-from-paste flow inline
+		// No config (or --reinit): remote init-from-paste flow
 		if flagBootstrapReinit || os.IsNotExist(statErr(configPath)) {
 			rc, err := bootstrapInit(configDir)
 			if err != nil {
 				return err
 			}
-			return runBootstrap(cmd.Context(), rc)
+			return runBootstrapRemote(cmd.Context(), rc)
 		}
 
-		_, rc, err := loadConfigAndContext(ctxName)
+		cfg, rc, err := loadConfigAndContext(ctxName)
 		if err != nil {
 			return err
 		}
-		return runBootstrap(cmd.Context(), rc)
+
+		if rc.IsLocal() {
+			return runBootstrapLocal(cmd, rc, cfg)
+		}
+		return runBootstrapRemote(cmd.Context(), rc)
 	},
 }
 
@@ -170,7 +181,128 @@ func bootstrapInit(configDir string) (*config.ResolvedContext, error) {
 	return rc, nil
 }
 
-func runBootstrap(parentCtx context.Context, rc *config.ResolvedContext) error {
+func runBootstrapLocal(cmd *cobra.Command, rc *config.ResolvedContext, cfg *config.Config) error {
+	ctx := cmd.Context()
+
+	fmt.Printf("=== Bootstrap local [%s] ===\n", rc.Name)
+	fmt.Println()
+
+	// 1. Generate and display the bootstrap payload
+	portBefore := rc.Context.Relay.RemotePort
+	remoteCfg := bootstrap.RemoteConfig(rc.Derived.ContextName, &rc.Context)
+
+	if rc.Context.Relay.RemotePort != portBefore {
+		fmt.Printf("Relay [%s]: assigned port %d\n", rc.Name, rc.Context.Relay.RemotePort)
+		if ctxCfg, ok := cfg.Contexts[rc.Name]; ok {
+			ctxCfg.Relay.RemotePort = rc.Context.Relay.RemotePort
+			cfg.Contexts[rc.Name] = ctxCfg
+		}
+		if err := persistPort(rc); err != nil {
+			slog.Warn("could not persist relay port to local config", "error", err)
+		}
+	}
+
+	b64, err := bootstrap.Encode(remoteCfg)
+	if err != nil {
+		return fmt.Errorf("encoding bootstrap payload: %w", err)
+	}
+
+	fmt.Println("Install jumpgate on the remote, then run: jumpgate bootstrap")
+	fmt.Println("When prompted, paste this string:")
+	fmt.Println()
+	fmt.Println(b64)
+	fmt.Println()
+	fmt.Println("Install commands (pick one):")
+	fmt.Println("  PowerShell:  irm https://github.com/cloudygreybeard/jumpgate/releases/latest/download/install.ps1 | iex")
+	fmt.Println("  curl | sh:   curl -fsSL https://github.com/cloudygreybeard/jumpgate/releases/latest/download/install.sh | sh")
+	fmt.Println()
+
+	// 2. Establish gate + auth
+	if err := auth.EnsureGate(ctx, rc); err != nil {
+		return err
+	}
+	if err := auth.EnsureKerberos(ctx, rc); err != nil {
+		return err
+	}
+
+	// Regenerate SSH config so the relay port is current
+	if err := runSetupSSH(rc); err != nil {
+		slog.Warn("could not regenerate SSH config", "error", err)
+	}
+
+	// 3. Wait for the remote bootstrap server to appear
+	remoteHost := rc.Derived.RemoteHost
+	fmt.Println()
+	fmt.Printf("Waiting for remote [%s] to connect (relay port %d)...\n",
+		rc.Name, rc.Context.Relay.RemotePort)
+	fmt.Println("  Run 'jumpgate bootstrap' on the remote and authenticate to the bastion.")
+	fmt.Println()
+
+	if err := waitForRemote(ctx, remoteHost); err != nil {
+		return err
+	}
+
+	fmt.Printf("Remote [%s] detected!\n", rc.Name)
+	fmt.Println()
+
+	// 4. Push full config
+	return runSetupRemote(cmd, rc)
+}
+
+// waitForRemote polls until the remote bootstrap server is reachable via SSH,
+// using accept-new for host keys and echo instead of true for PowerShell
+// compatibility. No hooks are invoked during polling.
+func waitForRemote(ctx context.Context, remoteHost string) error {
+	const maxWait = 10 * time.Minute
+	pollCtx, cancel := context.WithTimeout(ctx, maxWait)
+	defer cancel()
+
+	attempt := 0
+	for {
+		probeCtx, probeCancel := context.WithTimeout(pollCtx, 10*time.Second)
+		probe := exec.CommandContext(probeCtx, "ssh",
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=5",
+			"-o", "StrictHostKeyChecking=accept-new",
+			remoteHost, "echo ok",
+		)
+		err := probe.Run()
+		probeCancel()
+
+		if err == nil {
+			return nil
+		}
+
+		attempt++
+		delay := bootstrapPollDelay(attempt)
+		fmt.Printf("\r  waiting... attempt %d (next in %s)  ", attempt, delay)
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-pollCtx.Done():
+			timer.Stop()
+			fmt.Println()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("timed out waiting for remote (%s)", maxWait)
+		case <-timer.C:
+		}
+	}
+}
+
+func bootstrapPollDelay(attempt int) time.Duration {
+	d := time.Duration(1<<uint(attempt)) * time.Second
+	if d < 5*time.Second {
+		d = 5 * time.Second
+	}
+	if d > 30*time.Second {
+		d = 30 * time.Second
+	}
+	return d
+}
+
+func runBootstrapRemote(parentCtx context.Context, rc *config.ResolvedContext) error {
 	if rc.Context.Role != "remote" {
 		return fmt.Errorf("bootstrap is only for remote-role contexts (current role: %s)", rc.Context.Role)
 	}
