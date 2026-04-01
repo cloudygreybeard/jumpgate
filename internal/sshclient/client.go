@@ -31,13 +31,13 @@ type proxyConn struct {
 	closed bool
 }
 
-func (c *proxyConn) Read(b []byte) (int, error) { return c.stdout.Read(b) }
+func (c *proxyConn) Read(b []byte) (int, error)  { return c.stdout.Read(b) }
 func (c *proxyConn) Write(b []byte) (int, error) { return c.stdin.Write(b) }
-func (c *proxyConn) LocalAddr() net.Addr { return &net.TCPAddr{} }
-func (c *proxyConn) RemoteAddr() net.Addr { return &net.TCPAddr{} }
+func (c *proxyConn) LocalAddr() net.Addr         { return &net.TCPAddr{} }
+func (c *proxyConn) RemoteAddr() net.Addr        { return &net.TCPAddr{} }
 
-func (c *proxyConn) SetDeadline(_ time.Time) error { return nil }
-func (c *proxyConn) SetReadDeadline(_ time.Time) error { return nil }
+func (c *proxyConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *proxyConn) SetReadDeadline(_ time.Time) error  { return nil }
 func (c *proxyConn) SetWriteDeadline(_ time.Time) error { return nil }
 
 func (c *proxyConn) Close() error {
