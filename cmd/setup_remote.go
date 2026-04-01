@@ -271,7 +271,6 @@ func runSetupRemoteBundled(ctx context.Context, rc *config.ResolvedContext, verb
 	printStepDone(verbose, stepStart)
 
 	// 2. Build the bundle
-	stepStart = time.Now()
 	fmt.Print("  Building bundle... ")
 
 	remoteCfg := bootstrap.RemoteConfig(rc.Derived.ContextName, &rc.Context)
@@ -352,7 +351,7 @@ func runSetupRemoteBundled(ctx context.Context, rc *config.ResolvedContext, verb
 	printStepDone(verbose, stepStart)
 
 	// 5. Windows shortcuts (non-fatal)
-	out, err = client.Exec("test -f jumpgate/windows/install-shortcut.ps1")
+	_, err = client.Exec("test -f jumpgate/windows/install-shortcut.ps1")
 	if err == nil {
 		stepStart = time.Now()
 		fmt.Print("  Installing Windows shortcuts... ")

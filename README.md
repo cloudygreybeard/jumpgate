@@ -347,8 +347,9 @@ tunnel through the gate. On Windows, the installer automatically adds
 ### What happens next
 
 The local detects the remote through the relay and pushes the full
-configuration, hooks, SSH snippets, and Windows integration scripts.
-Once complete, both sides can use `jumpgate connect` for daily use.
+configuration, hooks, SSH snippets, and Windows integration scripts as a
+single compressed archive over a native Go SSH connection. The embedded
+server extracts the bundle in-process.
 
 The embedded server is a one-time bootstrap mechanism — once sshd is
 installed on the remote, `jumpgate connect` is used instead.
@@ -410,8 +411,9 @@ responsibly:
 
 - **No credentials stored on disk.** Jumpgate does not write passwords,
   tokens, or private keys to its config. Kerberos passwords are passed
-  to `kinit` via stdin pipe (never as command-line arguments). Gate
-  tokens are held in process memory only, within a 0700 temp directory.
+  to `kinit` via stdin pipe (never as command-line arguments).   Gate tokens are passed to `ssh` via environment variable and never
+  written to disk. Helper scripts are written to a 0700 temp directory
+  but contain no secrets.
 - **Isolated host key management.** Relay connections use a dedicated
   known_hosts file (`~/.config/jumpgate/known_hosts`), separate from
   `~/.ssh/known_hosts`. Jumpgate never modifies the user's global SSH
@@ -466,6 +468,10 @@ Near-term improvements planned or in progress:
 - **Configurable command allowlist** — allow users to extend the
   embedded bootstrap server's command allowlist via config for
   advanced workflows.
+- **Native Go SSH client for regular setup** — extend the native
+  `golang.org/x/crypto/ssh` transport (currently used for bootstrap)
+  to `jumpgate setup remote` for consistent performance when sshd is
+  running.
 - **WSL config sharing** — automatic config discovery between Windows
   and WSL on the same host, so both environments share a single
   jumpgate configuration.
