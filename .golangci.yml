@@ -1,19 +1,19 @@
 version: "2"
 
-linters-settings:
-  errcheck:
-    exclude-functions:
-      - (strings.Builder).WriteString
-      - (*bytes.Buffer).ReadFrom
-      - io.Copy
-      - fmt.Sscanf
+linters:
+  settings:
+    errcheck:
+      exclude-functions:
+        - (strings.Builder).WriteString
+        - (*bytes.Buffer).ReadFrom
+        - io.Copy
+        - fmt.Sscanf
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
 
 formatters:
   enable:
     - gofmt
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
