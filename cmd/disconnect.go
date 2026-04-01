@@ -5,14 +5,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var flagDisconnectAll bool
+var (
+	flagDisconnectAll   bool
+	flagDisconnectForce bool
+)
 
 var disconnectCmd = &cobra.Command{
 	Use:   "disconnect [CONTEXT]",
 	Short: "Close session and destroy Kerberos ticket",
 	Long: `Close the local gate session (or remote relay) and destroy the Kerberos ticket.
 
-With --all, also tears down the remote relay before closing the local gate.`,
+With --all, also tears down the remote relay before closing the local gate.
+With --force, also kills any orphaned SSH relay processes and cleans up sockets.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -31,11 +35,16 @@ With --all, also tears down the remote relay before closing the local gate.`,
 		} else {
 			connect.Disconnect(ctx, rc)
 		}
+
+		if flagDisconnectForce {
+			connect.ForceCleanup(rc)
+		}
 		return nil
 	},
 }
 
 func init() {
 	disconnectCmd.Flags().BoolVarP(&flagDisconnectAll, "all", "a", false, "also tear down the remote relay")
+	disconnectCmd.Flags().BoolVar(&flagDisconnectForce, "force", false, "kill orphaned SSH relay processes and clean up sockets")
 	rootCmd.AddCommand(disconnectCmd)
 }

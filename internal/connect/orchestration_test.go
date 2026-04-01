@@ -243,37 +243,28 @@ func TestConnectRemote_AutoGeneratePort(t *testing.T) {
 	}
 }
 
-func TestConnectRemote_PortInUse(t *testing.T) {
+func TestConnectRemote_RelayOpenFail(t *testing.T) {
 	rc, _ := makeTestEnv(t)
 	rc.Context.Role = "remote"
 	rc.Context.Relay.RemotePort = 55000
 	rc.Derived.GateSocket = ""
 	rc.Derived.RelaySocket = filepath.Join(t.TempDir(), "r.sock")
 
-	// Fake ssh: port check shows 55000 in use
+	// Fake ssh: relay open fails (simulates ExitOnForwardFailure)
 	binDir := filepath.Join(t.TempDir(), "bin")
 	os.MkdirAll(binDir, 0755)
 	script := `#!/bin/sh
-case "$*" in
-  *ss\ -tln*)
-    echo "LISTEN 0 128 0.0.0.0:55000 0.0.0.0:*"
-    exit 0
-    ;;
-esac
-exit 0
+exit 1
 `
 	os.WriteFile(filepath.Join(binDir, "ssh"), []byte(script), 0755)
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
 	err := connectRemote(context.Background(), rc, nil)
 	if err == nil {
-		t.Fatal("expected error when port is in use")
+		t.Fatal("expected error when relay open fails")
 	}
-	if !strings.Contains(err.Error(), "already in use") {
-		t.Errorf("error = %q, want 'already in use'", err.Error())
-	}
-	if !strings.Contains(err.Error(), "--relay-port") {
-		t.Errorf("error = %q, want mention of --relay-port", err.Error())
+	if !strings.Contains(err.Error(), "opening relay") {
+		t.Errorf("error = %q, want 'opening relay'", err.Error())
 	}
 }
 

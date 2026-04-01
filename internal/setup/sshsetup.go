@@ -3,7 +3,6 @@ package setup
 import (
 	"bytes"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,6 +220,9 @@ func writeRemoteRelayFallback(b *strings.Builder, d TemplateData) {
 		fmt.Fprintf(b, "  RemoteForward %d localhost:22\n", d.RelayPort)
 	}
 	fmt.Fprintf(b, "  ExitOnForwardFailure yes\n")
+	fmt.Fprintf(b, "  ControlMaster auto\n")
+	fmt.Fprintf(b, "  ControlPath %s/%s-relay.sock\n", d.SocketDir, d.Context)
+	fmt.Fprintf(b, "  ControlPersist yes\n")
 	b.WriteString("\n")
 }
 
@@ -248,30 +250,13 @@ func AddSSHInclude(configLocalPath string) error {
 	return nil
 }
 
-// EnsureSSHConfig regenerates SSH config if config.yaml is newer than the output.
+// EnsureSSHConfig regenerates SSH config unconditionally. The operation is fast
+// and avoids stale output when templates change between binary versions.
 func EnsureSSHConfig(cfg *config.Config, configDir, socketDir, mode string) error {
 	cfgPath := filepath.Join(configDir, "config.yaml")
-	var outputFile string
-	if mode == "remote" {
-		outputFile = filepath.Join(configDir, "ssh", "config.remote")
-	} else {
-		outputFile = filepath.Join(configDir, "ssh", "config.local")
-	}
-
-	cfgStat, err := os.Stat(cfgPath)
-	if err != nil {
+	if _, err := os.Stat(cfgPath); err != nil {
 		return nil // no config file, nothing to do
 	}
 
-	outStat, err := os.Stat(outputFile)
-	if err == nil && !outStat.ModTime().Before(cfgStat.ModTime()) {
-		return nil // output is up to date
-	}
-
-	slog.Debug("auto-regenerating SSH config", "reason", "config.yaml is newer")
-
-	// Load embedded snippets from the generated SSH config header won't work here,
-	// but we can use the fallback templates built into the shorthand writers.
-	// For full template support, the caller should pass snippets.
 	return GenerateSSHConfig(cfg, configDir, socketDir, mode, nil)
 }

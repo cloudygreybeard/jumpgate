@@ -14,3 +14,6 @@ Host {{.Context}}-relay{{if .IsDefault}} relay{{end}}
   RemoteForward {{.RelayPort}} localhost:22
 {{- end}}
   ExitOnForwardFailure yes
+  ControlMaster auto
+  ControlPath {{.SocketDir}}/{{.Context}}-relay.sock
+  ControlPersist yes

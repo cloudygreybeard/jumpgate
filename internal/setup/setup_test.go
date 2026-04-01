@@ -237,16 +237,14 @@ func TestEnsureSSHConfig_NoConfigFile(t *testing.T) {
 	}
 }
 
-func TestEnsureSSHConfig_UpToDate(t *testing.T) {
+func TestEnsureSSHConfig_AlwaysRegenerates(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, "config")
 	os.MkdirAll(filepath.Join(configDir, "ssh"), 0755)
 
-	// Create config.yaml
 	os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("test"), 0644)
-	// Create an output that is newer
 	outputPath := filepath.Join(configDir, "ssh", "config.local")
-	os.WriteFile(outputPath, []byte("generated"), 0644)
+	os.WriteFile(outputPath, []byte("stale-placeholder"), 0644)
 
 	cfg := &config.Config{DefaultContext: "work", Contexts: map[string]config.Context{}}
 
@@ -255,10 +253,9 @@ func TestEnsureSSHConfig_UpToDate(t *testing.T) {
 		t.Errorf("EnsureSSHConfig: %v", err)
 	}
 
-	// Output should be unchanged (not regenerated)
 	content, _ := os.ReadFile(outputPath)
-	if string(content) != "generated" {
-		t.Error("up-to-date output was unnecessarily regenerated")
+	if string(content) == "stale-placeholder" {
+		t.Error("EnsureSSHConfig should always regenerate")
 	}
 }
 

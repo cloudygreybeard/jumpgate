@@ -45,7 +45,15 @@ func relaySSHOptions() []string {
 	}
 }
 
-func Probe(ctx context.Context, host, ccFile string) bool {
+// ProbeResult describes why a probe failed (if it did).
+type ProbeResult struct {
+	Reachable bool
+	// Detail is set for actionable errors the user should see immediately
+	// rather than polling through. Empty means "not reachable yet, keep trying."
+	Detail string
+}
+
+func Probe(ctx context.Context, host, ccFile string) ProbeResult {
 	args := []string{
 		"-o", "ConnectTimeout=5",
 		"-o", "BatchMode=yes",
@@ -56,9 +64,31 @@ func Probe(ctx context.Context, host, ccFile string) bool {
 	if ccFile != "" {
 		cmd.Env = append(cmd.Environ(), "KRB5CCNAME=FILE:"+ccFile)
 	}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	err := cmd.Run()
 	slog.Debug("probe", "host", host, "reachable", err == nil)
-	return err == nil
+	if err == nil {
+		return ProbeResult{Reachable: true}
+	}
+
+	out := stderr.String()
+	switch {
+	case strings.Contains(out, "REMOTE HOST IDENTIFICATION HAS CHANGED") ||
+		strings.Contains(out, "Host key verification failed"):
+		return ProbeResult{Detail: "host-key-changed"}
+	case strings.Contains(out, "Permission denied"):
+		return ProbeResult{Detail: "permission-denied"}
+	case strings.Contains(out, "Connection refused") ||
+		strings.Contains(out, "Connection timed out") ||
+		strings.Contains(out, "No route to host") ||
+		strings.Contains(out, "connect to host") ||
+		ctx.Err() != nil:
+		return ProbeResult{} // not reachable yet, keep polling
+	default:
+		slog.Debug("probe stderr", "output", out)
+		return ProbeResult{}
+	}
 }
 
 func ProbeHostname(ctx context.Context, host, ccFile string) (string, bool) {

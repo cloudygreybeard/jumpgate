@@ -144,21 +144,24 @@ func TestOpenRelay_RemoveError(t *testing.T) {
 
 func TestProbe_Success(t *testing.T) {
 	setupFakeSSH(t, 0)
-	if !Probe(context.Background(), "host", "") {
+	r := Probe(context.Background(), "host", "")
+	if !r.Reachable {
 		t.Error("expected Probe to succeed")
 	}
 }
 
 func TestProbe_Failure(t *testing.T) {
 	setupFakeSSH(t, 1)
-	if Probe(context.Background(), "host", "") {
+	r := Probe(context.Background(), "host", "")
+	if r.Reachable {
 		t.Error("expected Probe to fail")
 	}
 }
 
 func TestProbe_WithCCFile(t *testing.T) {
 	setupFakeSSH(t, 0)
-	if !Probe(context.Background(), "host", "/tmp/krb5cc_test") {
+	r := Probe(context.Background(), "host", "/tmp/krb5cc_test")
+	if !r.Reachable {
 		t.Error("expected Probe with ccFile to succeed")
 	}
 }

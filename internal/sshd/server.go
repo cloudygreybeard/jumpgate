@@ -31,6 +31,13 @@ import (
 // entirely within the embedded server — no subprocess needed.
 const bundleCommandPrefix = "__jumpgate_receive_bundle"
 
+// shutdownCommand is sent by the local bootstrapper after setup remote
+// completes. The server handles it by closing the listener and exiting.
+const shutdownCommand = "__jumpgate_bootstrap_done"
+
+// ShutdownCommand returns the command string that triggers server exit.
+func ShutdownCommand() string { return shutdownCommand }
+
 // BundleCommand returns the command string for receiving a bundle.
 func BundleCommand() string { return bundleCommandPrefix }
 
@@ -38,6 +45,7 @@ func BundleCommand() string { return bundleCommandPrefix }
 // Only the basename of the first token in the command is checked.
 var defaultAllowedCommands = map[string]bool{
 	bundleCommandPrefix: true,
+	shutdownCommand:     true,
 	"cat":               true,
 	"chmod":             true,
 	"command":           true,
@@ -96,6 +104,8 @@ type Server struct {
 	fingerprint    string
 	authKeyType    string
 	authKeyComment string
+	shutdownOnce   sync.Once
+	shutdownCh     chan struct{}
 }
 
 // New creates a Server that listens on addr, authenticates against the
@@ -142,6 +152,7 @@ func New(hostKeyPath, authorizedKeyPath, addr, contextUID string) (*Server, erro
 		fingerprint:    fp,
 		authKeyType:    authorizedKey.Type(),
 		authKeyComment: comment,
+		shutdownCh:     make(chan struct{}),
 	}, nil
 }
 
@@ -199,6 +210,20 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	return nil
 }
 
+// ShutdownCh returns a channel that is closed when the server receives
+// the shutdown command from the local bootstrapper. The caller (bootstrap
+// cmd) should select on this to stop the relay SSH process.
+func (s *Server) ShutdownCh() <-chan struct{} {
+	return s.shutdownCh
+}
+
+func (s *Server) requestShutdown() {
+	s.shutdownOnce.Do(func() {
+		slog.Info("bootstrap-sshd: shutdown requested by remote setup completion")
+		close(s.shutdownCh)
+	})
+}
+
 // Addr returns the listener address, or empty if not yet listening.
 func (s *Server) Addr() string {
 	s.mu.Lock()
@@ -238,11 +263,11 @@ func (s *Server) handleConn(ctx context.Context, netConn net.Conn) {
 			slog.Debug("bootstrap-sshd: channel accept error", "error", err)
 			continue
 		}
-		go handleSession(ctx, ch, requests)
+		go s.handleSession(ctx, ch, requests)
 	}
 }
 
-func handleSession(ctx context.Context, ch ssh.Channel, reqs <-chan *ssh.Request) {
+func (s *Server) handleSession(ctx context.Context, ch ssh.Channel, reqs <-chan *ssh.Request) {
 	defer ch.Close()
 
 	for req := range reqs {
@@ -260,10 +285,8 @@ func handleSession(ctx context.Context, ch ssh.Channel, reqs <-chan *ssh.Request
 			command := string(req.Payload[4 : 4+cmdLen])
 			_ = req.Reply(true, nil)
 
-			exitCode := runCommand(ctx, ch, command)
+			exitCode := s.runCommand(ctx, ch, command)
 
-			// Signal EOF on stdout so the client's io.ReadAll returns,
-			// then send exit-status before closing the channel.
 			_ = ch.CloseWrite()
 			exitMsg := ssh.Marshal(struct{ Status uint32 }{uint32(exitCode)})
 			_, _ = ch.SendRequest("exit-status", false, exitMsg)
@@ -280,13 +303,19 @@ func handleSession(ctx context.Context, ch ssh.Channel, reqs <-chan *ssh.Request
 	}
 }
 
-func runCommand(ctx context.Context, ch ssh.Channel, command string) int {
+func (s *Server) runCommand(ctx context.Context, ch ssh.Channel, command string) int {
 	if !commandAllowed(command) {
 		slog.Warn("bootstrap-sshd: blocked command (not in allowlist)", "command", command)
 		_, _ = fmt.Fprintf(ch.Stderr(), "jumpgate bootstrap: command not permitted: %s\n", strings.SplitN(command, " ", 2)[0])
 		return 126
 	}
 	slog.Info("bootstrap-sshd: exec", "command", command)
+
+	if command == shutdownCommand {
+		_, _ = fmt.Fprintln(ch, "bootstrap server shutting down")
+		s.requestShutdown()
+		return 0
+	}
 
 	if strings.HasPrefix(command, bundleCommandPrefix) {
 		return handleReceiveBundle(ch, command)

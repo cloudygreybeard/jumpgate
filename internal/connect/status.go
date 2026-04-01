@@ -78,8 +78,10 @@ func collectStatusLocal(ctx context.Context, rc *config.ResolvedContext) StatusI
 	// Remote
 	if !info.Gate.Connected {
 		info.Remote = RemoteStatus{Reachable: false, Detail: "gate not connected"}
-	} else if internalssh.Probe(ctx, rc.Derived.RemoteHost, ccFile) {
+	} else if result := internalssh.Probe(ctx, rc.Derived.RemoteHost, ccFile); result.Reachable {
 		info.Remote = RemoteStatus{Reachable: true}
+	} else if result.Detail != "" {
+		info.Remote = RemoteStatus{Reachable: false, Detail: result.Detail}
 	} else {
 		info.Remote = RemoteStatus{Reachable: false, Detail: "relay may be down"}
 	}

@@ -260,7 +260,13 @@ func runBootstrapLocal(cmd *cobra.Command, rc *config.ResolvedContext, cfg *conf
 	fmt.Println()
 
 	// 4. Push full config
-	return runSetupRemote(cmd, rc)
+	if err := runSetupRemote(cmd, rc); err != nil {
+		return err
+	}
+
+	// 5. Signal the remote bootstrap server to exit
+	sendBootstrapShutdown(ctx, rc)
+	return nil
 }
 
 // waitForRemote polls until the remote bootstrap server is reachable.
@@ -424,16 +430,38 @@ func runBootstrapRemote(parentCtx context.Context, rc *config.ResolvedContext) e
 	fmt.Println("  (foreground session — Ctrl+C to close)")
 	fmt.Println()
 
-	relayErr := internalssh.RunRelayForeground(ctx, gateHost, relayPort, bootstrapSSHPort)
+	relayErrCh := make(chan error, 1)
+	go func() {
+		relayErrCh <- internalssh.RunRelayForeground(ctx, gateHost, relayPort, bootstrapSSHPort)
+	}()
 
-	// Capture whether the user cancelled BEFORE we cancel the embedded server
+	// Wait for one of: relay exit, user cancel, or remote setup completion.
+	var relayErr error
+	remoteSetupDone := false
+	select {
+	case relayErr = <-relayErrCh:
+	case <-srv.ShutdownCh():
+		remoteSetupDone = true
+		fmt.Println()
+		fmt.Printf("Bootstrap [%s]: remote setup complete — shutting down.\n", rc.Name)
+	}
+
 	userCancelled := ctx.Err() != nil
 
-	// Relay ended — shut down the embedded server
 	cancel()
+
+	// Wait for the relay goroutine to exit after context cancellation
+	select {
+	case re := <-relayErrCh:
+		if relayErr == nil {
+			relayErr = re
+		}
+	case <-time.After(10 * time.Second):
+		slog.Debug("relay goroutine did not exit promptly after cancel")
+	}
 	<-srvErr
 
-	if relayErr != nil && !userCancelled {
+	if relayErr != nil && !userCancelled && !remoteSetupDone {
 		fmt.Println()
 		fmt.Println("Bootstrap session ended.")
 		fmt.Println()
@@ -447,6 +475,31 @@ func runBootstrapRemote(parentCtx context.Context, rc *config.ResolvedContext) e
 	fmt.Println()
 	fmt.Println("Bootstrap session ended.")
 	return nil
+}
+
+// sendBootstrapShutdown sends the shutdown command to the remote's embedded
+// bootstrap server so it exits cleanly. Uses the native Go SSH client when
+// the remote key is available, falling back to shell ssh.
+func sendBootstrapShutdown(ctx context.Context, rc *config.ResolvedContext) {
+	remoteHost := rc.Derived.RemoteHost
+	shutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	slog.Debug("sending bootstrap shutdown signal", "remote", remoteHost)
+
+	cmd := exec.CommandContext(shutCtx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=5",
+		"-o", "UserKnownHostsFile="+internalssh.KnownHostsFile(),
+		"-o", "StrictHostKeyChecking=accept-new",
+		remoteHost, sshd.ShutdownCommand(),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		slog.Debug("bootstrap shutdown signal failed (non-fatal)", "error", err, "output", string(out))
+	} else {
+		slog.Debug("bootstrap shutdown acknowledged", "output", strings.TrimSpace(string(out)))
+	}
 }
 
 func randomEphemeralPort() int {
