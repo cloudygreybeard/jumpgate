@@ -237,7 +237,6 @@ func runSetupRemote(cmd *cobra.Command, rc *config.ResolvedContext) error {
 }
 
 func setupRemoteWSL(ctx context.Context, remoteHost string, verbose bool) error {
-	stepStart := time.Now()
 	fmt.Print("  Detecting WSL... ")
 
 	// Check if wsl.exe exists on the remote

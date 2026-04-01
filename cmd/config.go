@@ -14,10 +14,10 @@ import (
 
 // ConfigView is the structured representation of `config view` output.
 type ConfigView struct {
-	Platform PlatformInfo          `json:"platform" yaml:"platform"`
-	Name     string                `json:"context" yaml:"context"`
-	Derived  config.Derived        `json:"derived" yaml:"derived"`
-	Config   config.Context        `json:"config" yaml:"config"`
+	Platform PlatformInfo   `json:"platform" yaml:"platform"`
+	Name     string         `json:"context" yaml:"context"`
+	Derived  config.Derived `json:"derived" yaml:"derived"`
+	Config   config.Context `json:"config" yaml:"config"`
 }
 
 type PlatformInfo struct {
