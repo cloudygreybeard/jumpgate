@@ -269,7 +269,7 @@ func setupRemoteWSL(ctx context.Context, remoteHost string, verbose bool) error 
 	fmt.Println("OK")
 
 	// Copy config.yaml to WSL
-	stepStart = time.Now()
+	stepStart := time.Now()
 	fmt.Print("  Copying config to WSL... ")
 	copyScript := `wsl.exe -e sh -c "mkdir -p ~/.config/jumpgate && cp /mnt/c/Users/$USER/.config/jumpgate/config.yaml ~/.config/jumpgate/config.yaml"`
 	if err := sshRun(ctx, remoteHost, copyScript); err != nil {
