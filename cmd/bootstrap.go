@@ -234,7 +234,7 @@ func runBootstrapLocal(cmd *cobra.Command, rc *config.ResolvedContext, cfg *conf
 	// 3. Clear any stale known_hosts entry for the relay endpoint.
 	// The bootstrap server generates a fresh host key each time, so an old
 	// entry would cause accept-new to reject the connection.
-	clearStaleHostKey(rc.Context.Relay.RemotePort)
+	internalssh.ClearStaleHostKey(rc.Context.Relay.RemotePort)
 
 	// 4. Wait for the remote bootstrap server to appear
 	remoteHost := rc.Derived.RemoteHost
@@ -274,6 +274,7 @@ func waitForRemote(ctx context.Context, remoteHost, expectedUID string) error {
 			"-v",
 			"-o", "BatchMode=yes",
 			"-o", "ConnectTimeout=5",
+			"-o", "UserKnownHostsFile="+internalssh.KnownHostsFile(),
 			"-o", "StrictHostKeyChecking=accept-new",
 			remoteHost, "echo ok",
 		)
@@ -323,22 +324,6 @@ func waitForRemote(ctx context.Context, remoteHost, expectedUID string) error {
 // jumpgate-bootstrap_<uid>".
 func checkBanner(sshVerbose, expectedBanner string) bool {
 	return strings.Contains(sshVerbose, expectedBanner)
-}
-
-// clearStaleHostKey removes any known_hosts entry for [localhost]:port.
-// The bootstrap server generates a new host key on each init, so a leftover
-// entry from a previous bootstrap would cause StrictHostKeyChecking=accept-new
-// to reject the connection with "REMOTE HOST IDENTIFICATION HAS CHANGED".
-func clearStaleHostKey(port int) {
-	target := fmt.Sprintf("[localhost]:%d", port)
-	cmd := exec.Command("ssh-keygen", "-R", target)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Run(); err != nil {
-		slog.Debug("ssh-keygen -R (no-op if no entry existed)", "target", target, "error", err)
-	} else {
-		slog.Debug("cleared stale known_hosts entry", "target", target)
-	}
 }
 
 func bootstrapPollDelay(attempt int) time.Duration {

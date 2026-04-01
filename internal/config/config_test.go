@@ -210,7 +210,7 @@ func TestKDCForwardSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := "0.0.0.0:8888:kdc.example.com:88"
+	want := "127.0.0.1:8888:kdc.example.com:88"
 	if got := rc.KDCForwardSpec(); got != want {
 		t.Errorf("KDCForwardSpec() = %q, want %q", got, want)
 	}

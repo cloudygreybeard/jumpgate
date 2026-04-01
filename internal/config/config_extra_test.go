@@ -81,7 +81,7 @@ func TestKDCForwardSpec_CustomPorts(t *testing.T) {
 			},
 		},
 	}
-	want := "0.0.0.0:9999:mykdc.example.com:188"
+	want := "127.0.0.1:9999:mykdc.example.com:188"
 	if got := rc.KDCForwardSpec(); got != want {
 		t.Errorf("KDCForwardSpec() = %q, want %q", got, want)
 	}

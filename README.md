@@ -402,6 +402,76 @@ cat context.yaml | jumpgate config import --context lab
 Accepts the full `config view` envelope or a bare context object, in JSON
 or YAML (auto-detected).
 
+## Security
+
+Jumpgate manages SSH sessions, Kerberos tickets, and relay tunnels. It
+takes the following measures to handle credentials and connections
+responsibly:
+
+- **No credentials stored on disk.** Jumpgate does not write passwords,
+  tokens, or private keys to its config. Kerberos passwords are passed
+  to `kinit` via stdin pipe (never as command-line arguments). Gate
+  tokens are held in process memory only, within a 0700 temp directory.
+- **Isolated host key management.** Relay connections use a dedicated
+  known_hosts file (`~/.config/jumpgate/known_hosts`), separate from
+  `~/.ssh/known_hosts`. Jumpgate never modifies the user's global SSH
+  trust store.
+- **Bootstrap server hardening.** The embedded SSH server used during
+  remote bootstrap binds to `127.0.0.1` only (not network-accessible),
+  authenticates with a single authorized public key, and enforces a
+  command allowlist. It is a one-time initialisation mechanism, not a
+  permanent service.
+- **Input validation.** Context names and UIDs are validated against a
+  strict character class at load time to prevent shell injection in
+  remote commands.
+- **Loopback-only port forwards.** All local port forwards (including
+  Kerberos KDC tunnels) bind to `127.0.0.1`.
+
+### Things to be aware of
+
+- **Bootstrap payload is not signed.** The base64 string pasted during
+  `jumpgate bootstrap` carries configuration data (gate hostname, auth
+  user, relay port, public key) but has no cryptographic integrity
+  protection. Transfer it through a trusted channel. Signing is on the
+  roadmap.
+- **Hook scripts run with your environment.** Hooks in
+  `~/.config/jumpgate/hooks/` execute with the full parent process
+  environment. Only use hooks from trusted sources.
+- **Config files are world-readable.** `config.yaml` is created with
+  mode 0644. It contains hostnames, usernames, and relay ports (no
+  secrets). On shared systems, consider tightening permissions
+  (`chmod 600 ~/.config/jumpgate/config.yaml`).
+- **The embedded bootstrap server allows exec.** While gated by an
+  allowlist and single-key auth, the bootstrap server can execute
+  commands as the current user. Run `jumpgate bootstrap` only when
+  actively bootstrapping, and stop it promptly afterward.
+
+### Reporting vulnerabilities
+
+If you discover a security issue, please report it privately via
+[GitHub Security Advisories](https://github.com/cloudygreybeard/jumpgate/security/advisories)
+or by email rather than opening a public issue.
+
+## Roadmap
+
+Near-term improvements planned or in progress:
+
+- **Bootstrap payload signing** — cryptographic integrity protection
+  for the bootstrap payload, with optional verification hash for
+  out-of-band confirmation.
+- **Config versioning** — `apiVersion` and `kind` fields in
+  `config.yaml` (following the Kubernetes resource manifest pattern)
+  for explicit version detection, structured migration, and forward
+  compatibility.
+- **Configurable command allowlist** — allow users to extend the
+  embedded bootstrap server's command allowlist via config for
+  advanced workflows.
+- **WSL config sharing** — automatic config discovery between Windows
+  and WSL on the same host, so both environments share a single
+  jumpgate configuration.
+- **Environment scrubbing** — minimal environment allowlist for
+  commands executed by the embedded bootstrap server.
+
 ## Development
 
 ```bash

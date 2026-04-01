@@ -67,8 +67,10 @@ func DisconnectRemoteSide(ctx context.Context, rc *config.ResolvedContext) {
 	cmd := exec.CommandContext(ctx, "ssh",
 		"-o", "ConnectTimeout=5",
 		"-o", "BatchMode=yes",
+		"-o", "UserKnownHostsFile="+internalssh.KnownHostsFile(),
+		"-o", "StrictHostKeyChecking=accept-new",
 		remoteHost,
-		fmt.Sprintf("jumpgate disconnect %s", rc.Name),
+		fmt.Sprintf("jumpgate disconnect '%s'", rc.Name),
 	)
 	if ccFile != "" {
 		cmd.Env = append(cmd.Environ(), "KRB5CCNAME=FILE:"+ccFile)

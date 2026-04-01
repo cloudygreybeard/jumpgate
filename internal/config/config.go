@@ -5,11 +5,33 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// validName matches safe context names: alphanumeric start, then
+// alphanumeric, dot, hyphen, or underscore. This prevents shell
+// metacharacter injection when names are interpolated into remote commands.
+var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+// ValidateName checks that a context name or UID is safe for use in
+// shell commands and file paths. Returns an error if it contains
+// characters that could be interpreted as shell metacharacters.
+func ValidateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name must not be empty")
+	}
+	if len(name) > 128 {
+		return fmt.Errorf("name %q exceeds 128 characters", name)
+	}
+	if !validName.MatchString(name) {
+		return fmt.Errorf("name %q contains unsafe characters (allowed: a-z A-Z 0-9 . _ -)", name)
+	}
+	return nil
+}
 
 type Config struct {
 	DefaultContext string             `yaml:"default_context"`
@@ -216,6 +238,10 @@ func (c *Config) Resolve(contextName string) (*ResolvedContext, error) {
 		contextName = c.DefaultContext
 	}
 
+	if err := ValidateName(contextName); err != nil {
+		return nil, fmt.Errorf("invalid context name: %w", err)
+	}
+
 	ctx, ok := c.Contexts[contextName]
 	if !ok {
 		available := make([]string, 0, len(c.Contexts))
@@ -224,6 +250,12 @@ func (c *Config) Resolve(contextName string) (*ResolvedContext, error) {
 		}
 		return nil, fmt.Errorf("context %q not found (available: %s)",
 			contextName, strings.Join(available, ", "))
+	}
+
+	if ctx.UID != "" {
+		if err := ValidateName(ctx.UID); err != nil {
+			return nil, fmt.Errorf("invalid context UID: %w", err)
+		}
 	}
 
 	applyDefaults(&ctx, contextName)
@@ -302,8 +334,9 @@ func (rc *ResolvedContext) IsLocal() bool {
 }
 
 // KDCForwardSpec returns the -L forward spec for the ephemeral KDC tunnel.
+// Binds to loopback only to avoid exposing the KDC port to the LAN.
 func (rc *ResolvedContext) KDCForwardSpec() string {
-	return fmt.Sprintf("0.0.0.0:%d:%s:%d",
+	return fmt.Sprintf("127.0.0.1:%d:%s:%d",
 		rc.Context.Auth.KDCLocalPort,
 		rc.Context.Auth.KDC,
 		rc.Context.Auth.KDCRemotePort,

@@ -147,14 +147,17 @@ func connectRemote(ctx context.Context, rc *config.ResolvedContext, cfg *config.
 // connectRemoteWindows runs the relay as a single foreground SSH session.
 // Without ControlMaster, every SSH command requires separate authentication,
 // so we skip the port check and marker write and run one clean session.
+// Uses the gate host (not relay alias) to avoid a double RemoteForward: the
+// relay alias already includes a RemoteForward directive in the SSH config,
+// so passing -R as well would cause a duplicate port bind failure.
 func connectRemoteWindows(ctx context.Context, rc *config.ResolvedContext) error {
-	relayHost := rc.Derived.RelayHost
+	gateHost := rc.Derived.GateHost
 
-	fmt.Printf("Relay [%s]: connecting to %s (RemoteForward %d -> localhost:22)...\n",
-		rc.Name, relayHost, rc.Context.Relay.RemotePort)
+	fmt.Printf("Relay [%s]: connecting via %s (RemoteForward %d -> localhost:22)...\n",
+		rc.Name, gateHost, rc.Context.Relay.RemotePort)
 	fmt.Println("  (foreground session — Ctrl+C to close)")
 
-	return internalssh.RunRelayForeground(ctx, relayHost, rc.Context.Relay.RemotePort, 22)
+	return internalssh.RunRelayForeground(ctx, gateHost, rc.Context.Relay.RemotePort, 22)
 }
 
 func connectRemoteUnix(ctx context.Context, rc *config.ResolvedContext) error {

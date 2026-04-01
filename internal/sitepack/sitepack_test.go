@@ -309,9 +309,9 @@ func TestExport(t *testing.T) {
 	os.WriteFile(filepath.Join(configDir, "ssh", "snippets", "custom.conf.tpl"), []byte("Host custom\n"), 0644)
 
 	ctx := config.Context{
-		Role: "local",
-		Gate: config.GateConfig{Hostname: "gw.example.com", Port: 330},
-		Auth: config.AuthConfig{Type: "kerberos", User: "alice", Realm: "EXAMPLE.COM"},
+		Role:  "local",
+		Gate:  config.GateConfig{Hostname: "gw.example.com", Port: 330},
+		Auth:  config.AuthConfig{Type: "kerberos", User: "alice", Realm: "EXAMPLE.COM"},
 		Relay: config.RelayConfig{RemotePort: 55555},
 	}
 
@@ -445,13 +445,13 @@ func TestExportThenImport_RoundTrip(t *testing.T) {
 
 func TestApplyValues(t *testing.T) {
 	vals := map[string]string{
-		"role":       "local",
-		"gate_host":  "gw.example.com",
-		"gate_port":  "330",
-		"auth_type":  "kerberos",
-		"auth_user":  "alice",
-		"auth_realm": "EXAMPLE.COM",
-		"relay_port": "55555",
+		"role":        "local",
+		"gate_host":   "gw.example.com",
+		"gate_port":   "330",
+		"auth_type":   "kerberos",
+		"auth_user":   "alice",
+		"auth_realm":  "EXAMPLE.COM",
+		"relay_port":  "55555",
 		"remote_user": "alice-remote",
 	}
 

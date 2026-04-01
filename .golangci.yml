@@ -1,13 +1,31 @@
-linters-settings:
-  errcheck:
-    exclude-functions:
-      - (strings.Builder).WriteString
-      - (*bytes.Buffer).ReadFrom
-      - io.Copy
-      - fmt.Sscanf
+version: "2"
 
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
+linters:
+  settings:
+    errcheck:
+      exclude-functions:
+        - (strings.Builder).WriteString
+        - (*bytes.Buffer).ReadFrom
+        - io.Copy
+        - fmt.Sscanf
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+        - (*os.File).Close
+        - (*compress/gzip.Writer).Close
+        - (*compress/gzip.Reader).Close
+        - os.Remove
+        - os.RemoveAll
+      check-blank: false
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+      - linters:
+          - errcheck
+        text: "Error return value of .*.Close` is not checked"
+
+formatters:
+  enable:
+    - gofmt
