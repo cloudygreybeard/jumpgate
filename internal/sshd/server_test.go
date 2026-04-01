@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudygreybeard/jumpgate/internal/transfer"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -180,6 +182,8 @@ func TestCommandAllowlist(t *testing.T) {
 		want bool
 	}{
 		{"echo hello", true},
+		{"__jumpgate_receive_bundle /tmp/extract", true},
+		{"__jumpgate_receive_bundle", true},
 		{"mkdir -p ~/.config/jumpgate", true},
 		{"scp -t .config/jumpgate/config.yaml", true},
 		{"/usr/bin/scp -t foo", true},
@@ -260,6 +264,96 @@ func TestServerBlocksDisallowedCommand(t *testing.T) {
 	err = session.Run("python3 -c 'print(1)'")
 	if err == nil {
 		t.Fatal("expected disallowed command to fail")
+	}
+
+	cancel()
+	<-errCh
+}
+
+func TestServerReceiveBundle(t *testing.T) {
+	hostKeyPath, authKeyPath, clientSigner := setupTestKeys(t)
+	extractDir := t.TempDir()
+
+	srv, err := New(hostKeyPath, authKeyPath, "127.0.0.1:0", "test-uid")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe(ctx) }()
+
+	for i := 0; i < 50; i++ {
+		if srv.Addr() != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if srv.Addr() == "" {
+		t.Fatal("server did not start listening")
+	}
+
+	hostKey, err := os.ReadFile(hostKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostSigner, err := ssh.ParsePrivateKey(hostKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientCfg := &ssh.ClientConfig{
+		User:            "test",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(clientSigner)},
+		HostKeyCallback: ssh.FixedHostKey(hostSigner.PublicKey()),
+	}
+
+	client, err := ssh.Dial("tcp", srv.Addr(), clientCfg)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	// Build a test bundle
+	bundleFiles := map[string][]byte{
+		".config/jumpgate/config.yaml": []byte("default_context: test\n"),
+		".config/jumpgate/hooks/pre":   []byte("#!/bin/sh\necho pre\n"),
+	}
+	var bundle bytes.Buffer
+	if err := transfer.CreateBundleFromBytes(&bundle, bundleFiles, 0644); err != nil {
+		t.Fatalf("CreateBundleFromBytes: %v", err)
+	}
+	t.Logf("bundle size: %d bytes", bundle.Len())
+
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer session.Close()
+
+	session.Stdin = &bundle
+	var stdout, stderr bytes.Buffer
+	session.Stdout = &stdout
+	session.Stderr = &stderr
+
+	if err := session.Run(BundleCommand() + " " + extractDir); err != nil {
+		t.Fatalf("receive bundle failed: %v (stderr: %s)", err, stderr.String())
+	}
+
+	t.Logf("stdout: %s", stdout.String())
+
+	// Verify extracted files
+	for name, want := range bundleFiles {
+		got, err := os.ReadFile(filepath.Join(extractDir, name))
+		if err != nil {
+			t.Errorf("missing extracted file %s: %v", name, err)
+			continue
+		}
+		if string(got) != string(want) {
+			t.Errorf("file %s: got %q, want %q", name, got, want)
+		}
 	}
 
 	cancel()

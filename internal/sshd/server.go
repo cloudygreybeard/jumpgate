@@ -22,32 +22,42 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cloudygreybeard/jumpgate/internal/transfer"
 	"golang.org/x/crypto/ssh"
 )
+
+// bundleCommandPrefix is the internal command prefix used to receive a
+// tar.gz archive over stdin and extract it to a target directory. Handled
+// entirely within the embedded server — no subprocess needed.
+const bundleCommandPrefix = "__jumpgate_receive_bundle"
+
+// BundleCommand returns the command string for receiving a bundle.
+func BundleCommand() string { return bundleCommandPrefix }
 
 // defaultAllowedCommands is the day-0 command allowlist for bootstrap exec.
 // Only the basename of the first token in the command is checked.
 var defaultAllowedCommands = map[string]bool{
-	"cat":            true,
-	"chmod":          true,
-	"command":        true,
-	"cp":             true,
-	"echo":           true,
-	"hostname":       true,
-	"id":             true,
-	"jumpgate":       true,
-	"jumpgate.exe":   true,
-	"ls":             true,
-	"mkdir":          true,
-	"powershell.exe": true,
-	"rm":             true,
-	"scp":            true,
-	"scp.exe":        true,
-	"test":           true,
-	"true":           true,
-	"uname":          true,
-	"whoami":         true,
-	"wsl.exe":        true,
+	bundleCommandPrefix: true,
+	"cat":               true,
+	"chmod":             true,
+	"command":           true,
+	"cp":                true,
+	"echo":              true,
+	"hostname":          true,
+	"id":                true,
+	"jumpgate":          true,
+	"jumpgate.exe":      true,
+	"ls":                true,
+	"mkdir":             true,
+	"powershell.exe":    true,
+	"rm":                true,
+	"scp":               true,
+	"scp.exe":           true,
+	"test":              true,
+	"true":              true,
+	"uname":             true,
+	"whoami":            true,
+	"wsl.exe":           true,
 }
 
 // commandAllowed checks whether the first token (basename) of the
@@ -278,6 +288,10 @@ func runCommand(ctx context.Context, ch ssh.Channel, command string) int {
 	}
 	slog.Info("bootstrap-sshd: exec", "command", command)
 
+	if strings.HasPrefix(command, bundleCommandPrefix) {
+		return handleReceiveBundle(ch, command)
+	}
+
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", command)
@@ -310,6 +324,36 @@ func runCommand(ctx context.Context, ch ssh.Channel, command string) int {
 		_, _ = fmt.Fprintf(ch.Stderr(), "exec error: %v\n", err)
 		return 1
 	}
+	return 0
+}
+
+// handleReceiveBundle extracts a tar.gz archive from the channel's stdin
+// into baseDir. The command format is: __jumpgate_receive_bundle <base_dir>
+// All extraction happens in-process — no external tar binary needed.
+func handleReceiveBundle(ch ssh.Channel, command string) int {
+	parts := strings.SplitN(command, " ", 2)
+	baseDir := ""
+	if len(parts) > 1 {
+		baseDir = strings.TrimSpace(parts[1])
+	}
+	if baseDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			_, _ = fmt.Fprintf(ch.Stderr(), "cannot determine home directory: %v\n", err)
+			return 1
+		}
+		baseDir = home
+	}
+
+	count, err := transfer.ExtractBundle(ch, baseDir)
+	if err != nil {
+		slog.Warn("bootstrap-sshd: bundle extraction failed", "error", err, "base_dir", baseDir)
+		_, _ = fmt.Fprintf(ch.Stderr(), "bundle extraction failed: %v\n", err)
+		return 1
+	}
+
+	slog.Info("bootstrap-sshd: bundle extracted", "files", count, "base_dir", baseDir)
+	_, _ = fmt.Fprintf(ch, "extracted %d files\n", count)
 	return 0
 }
 
