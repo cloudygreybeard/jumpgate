@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cloudygreybeard/jumpgate/internal/bootstrap"
 	"github.com/cloudygreybeard/jumpgate/internal/config"
+	internalssh "github.com/cloudygreybeard/jumpgate/internal/ssh"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -123,7 +125,13 @@ func runSetupRemote(cmd *cobra.Command, rc *config.ResolvedContext) error {
 	// Verify remote is reachable
 	stepStart := time.Now()
 	fmt.Print("  Checking remote connectivity... ")
-	probe := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", remoteHost, "echo ok")
+	probe := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
+		"-o", "UserKnownHostsFile="+internalssh.KnownHostsFile(),
+		"-o", "StrictHostKeyChecking=accept-new",
+		remoteHost, "echo ok",
+	)
 	if err := probe.Run(); err != nil {
 		fmt.Println("FAILED")
 		return fmt.Errorf("remote %s is not reachable -- is the relay tunnel up? (jumpgate connect)", remoteHost)
@@ -217,8 +225,95 @@ func runSetupRemote(cmd *cobra.Command, rc *config.ResolvedContext) error {
 		}
 	}
 
+	// WSL setup: if the remote has WSL available, copy config and generate
+	// SSH config so 'jumpgate connect' works from WSL immediately.
+	if err := setupRemoteWSL(ctx, remoteHost, verbose); err != nil {
+		slog.Warn("WSL setup failed (non-fatal)", "error", err)
+	}
+
 	fmt.Println()
 	fmt.Printf("Remote [%s] is fully set up.\n", rc.Name)
+	return nil
+}
+
+func setupRemoteWSL(ctx context.Context, remoteHost string, verbose bool) error {
+	stepStart := time.Now()
+	fmt.Print("  Detecting WSL... ")
+
+	// Check if wsl.exe exists on the remote
+	if err := sshRun(ctx, remoteHost, "wsl.exe --status >nul 2>&1"); err != nil {
+		// Try sh-compatible syntax as well (if connected to WSL already)
+		if err2 := sshRun(ctx, remoteHost, "command -v wsl.exe >/dev/null 2>&1"); err2 != nil {
+			fmt.Println("not found (skipping)")
+			return nil
+		}
+	}
+
+	// Get the WSL distro name
+	distroOut, _ := sshRunOutput(ctx, remoteHost, `wsl.exe --list --quiet`)
+	distro := firstNonEmptyLine(distroOut)
+	if distro == "" {
+		fmt.Println("no distro installed (skipping)")
+		return nil
+	}
+	fmt.Printf("found (%s)\n", distro)
+
+	// Check if jumpgate is installed in WSL
+	fmt.Print("  Checking jumpgate in WSL... ")
+	if err := sshRun(ctx, remoteHost, `wsl.exe -e sh -c "command -v jumpgate >/dev/null 2>&1"`); err != nil {
+		fmt.Println("not installed")
+		fmt.Println("    Hint: install jumpgate in WSL to enable WSL access:")
+		fmt.Println("      wsl -e sh -c 'curl -fsSL https://github.com/cloudygreybeard/jumpgate/releases/latest/download/install.sh | sh'")
+		fmt.Println("    or: wsl -e sh -c 'brew install cloudygreybeard/tap/jumpgate'")
+		return nil
+	}
+	fmt.Println("OK")
+
+	// Copy config.yaml to WSL
+	stepStart = time.Now()
+	fmt.Print("  Copying config to WSL... ")
+	copyScript := `wsl.exe -e sh -c "mkdir -p ~/.config/jumpgate && cp /mnt/c/Users/$USER/.config/jumpgate/config.yaml ~/.config/jumpgate/config.yaml"`
+	if err := sshRun(ctx, remoteHost, copyScript); err != nil {
+		// Try with explicit Windows username from USERPROFILE
+		copyScript = `wsl.exe -e sh -c "WIN_HOME=$(wslpath -u \"$(cmd.exe /C 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r')\") && mkdir -p ~/.config/jumpgate && cp \"$WIN_HOME/.config/jumpgate/config.yaml\" ~/.config/jumpgate/config.yaml"`
+		if err := sshRun(ctx, remoteHost, copyScript); err != nil {
+			return fmt.Errorf("copying config to WSL: %w", err)
+		}
+	}
+	printStepDone(verbose, stepStart)
+
+	// Copy hooks to WSL (if they exist)
+	stepStart = time.Now()
+	fmt.Print("  Copying hooks to WSL... ")
+	hooksScript := `wsl.exe -e sh -c "WIN_HOME=$(wslpath -u \"$(cmd.exe /C 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r')\") && [ -d \"$WIN_HOME/.config/jumpgate/hooks\" ] && mkdir -p ~/.config/jumpgate/hooks && cp -r \"$WIN_HOME/.config/jumpgate/hooks/\"* ~/.config/jumpgate/hooks/ && chmod +x ~/.config/jumpgate/hooks/* 2>/dev/null; true"`
+	if err := sshRun(ctx, remoteHost, hooksScript); err != nil {
+		slog.Debug("WSL hooks copy failed (non-fatal)", "error", err)
+		fmt.Println("SKIPPED")
+	} else {
+		printStepDone(verbose, stepStart)
+	}
+
+	// Copy SSH snippets to WSL (if they exist)
+	stepStart = time.Now()
+	fmt.Print("  Copying SSH snippets to WSL... ")
+	snippetsScript := `wsl.exe -e sh -c "WIN_HOME=$(wslpath -u \"$(cmd.exe /C 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r')\") && [ -d \"$WIN_HOME/.config/jumpgate/ssh/snippets\" ] && mkdir -p ~/.config/jumpgate/ssh/snippets && cp -r \"$WIN_HOME/.config/jumpgate/ssh/snippets/\"* ~/.config/jumpgate/ssh/snippets/; true"`
+	if err := sshRun(ctx, remoteHost, snippetsScript); err != nil {
+		slog.Debug("WSL snippets copy failed (non-fatal)", "error", err)
+		fmt.Println("SKIPPED")
+	} else {
+		printStepDone(verbose, stepStart)
+	}
+
+	// Run jumpgate setup ssh inside WSL
+	stepStart = time.Now()
+	fmt.Print("  Running 'jumpgate setup ssh' in WSL... ")
+	if err := sshRun(ctx, remoteHost, `wsl.exe -e jumpgate setup ssh`); err != nil {
+		if err2 := sshRun(ctx, remoteHost, `wsl.exe -e sh -c "$HOME/bin/jumpgate setup ssh"`); err2 != nil {
+			return fmt.Errorf("WSL setup ssh failed: %w", err2)
+		}
+	}
+	printStepDone(verbose, stepStart)
+
 	return nil
 }
 
@@ -313,7 +408,12 @@ func scpToRemote(ctx context.Context, localPath, remoteHost, remotePath string) 
 
 func sshRun(ctx context.Context, remoteHost, command string) error {
 	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", remoteHost, command)
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "UserKnownHostsFile="+internalssh.KnownHostsFile(),
+		"-o", "StrictHostKeyChecking=accept-new",
+		remoteHost, command,
+	)
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if stderr.Len() > 0 {
@@ -322,4 +422,27 @@ func sshRun(ctx context.Context, remoteHost, command string) error {
 		return err
 	}
 	return nil
+}
+
+func sshRunOutput(ctx context.Context, remoteHost, command string) (string, error) {
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "UserKnownHostsFile="+internalssh.KnownHostsFile(),
+		"-o", "StrictHostKeyChecking=accept-new",
+		remoteHost, command,
+	)
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		// wsl.exe output is sometimes UTF-16LE; strip NUL bytes
+		line = strings.ReplaceAll(line, "\x00", "")
+		if line != "" {
+			return line
+		}
+	}
+	return ""
 }

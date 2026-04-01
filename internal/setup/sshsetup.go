@@ -14,15 +14,16 @@ import (
 
 // TemplateData holds values passed to SSH config templates.
 type TemplateData struct {
-	Context    string
-	IsDefault  bool
-	Hostname   string
-	User       string
-	Port       int
-	SocketDir  string
-	RemoteUser string
-	RelayPort  int
-	RemoteKey  string
+	Context        string
+	IsDefault      bool
+	Hostname       string
+	User           string
+	Port           int
+	SocketDir      string
+	RemoteUser     string
+	RelayPort      int
+	RemoteKey      string
+	KnownHostsFile string
 }
 
 // GenerateSSHConfig generates SSH config from templates for all contexts.
@@ -57,16 +58,18 @@ func GenerateSSHConfig(cfg *config.Config, configDir, socketDir, mode string, sn
 		}
 
 		p := rc.Context
+		knownHostsFile := filepath.Join(configDir, "known_hosts")
 		data := TemplateData{
-			Context:    name,
-			IsDefault:  name == cfg.DefaultContext,
-			Hostname:   p.Gate.Hostname,
-			User:       p.Auth.User,
-			Port:       p.Gate.Port,
-			SocketDir:  socketDir,
-			RemoteUser: p.Remote.User,
-			RelayPort:  p.Relay.RemotePort,
-			RemoteKey:  p.Remote.Key,
+			Context:        name,
+			IsDefault:      name == cfg.DefaultContext,
+			Hostname:       p.Gate.Hostname,
+			User:           p.Auth.User,
+			Port:           p.Gate.Port,
+			SocketDir:      socketDir,
+			RemoteUser:     p.Remote.User,
+			RelayPort:      p.Relay.RemotePort,
+			RemoteKey:      p.Remote.Key,
+			KnownHostsFile: knownHostsFile,
 		}
 
 		if mode == "remote" {
@@ -174,6 +177,10 @@ func writeLocalRemoteFallback(b *strings.Builder, d TemplateData) {
 	}
 	if d.RemoteKey != "" {
 		fmt.Fprintf(b, "  IdentityFile %s\n", d.RemoteKey)
+	}
+	if d.KnownHostsFile != "" {
+		fmt.Fprintf(b, "  UserKnownHostsFile %s\n", d.KnownHostsFile)
+		fmt.Fprintf(b, "  StrictHostKeyChecking accept-new\n")
 	}
 	fmt.Fprintf(b, "  AddKeysToAgent yes\n")
 	fmt.Fprintf(b, "  UseKeychain yes\n")

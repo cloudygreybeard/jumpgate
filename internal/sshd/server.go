@@ -17,11 +17,50 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"golang.org/x/crypto/ssh"
 )
+
+// defaultAllowedCommands is the day-0 command allowlist for bootstrap exec.
+// Only the basename of the first token in the command is checked.
+var defaultAllowedCommands = map[string]bool{
+	"cat":            true,
+	"chmod":          true,
+	"command":        true,
+	"cp":             true,
+	"echo":           true,
+	"hostname":       true,
+	"id":             true,
+	"jumpgate":       true,
+	"jumpgate.exe":   true,
+	"ls":             true,
+	"mkdir":          true,
+	"powershell.exe": true,
+	"rm":             true,
+	"scp":            true,
+	"scp.exe":        true,
+	"test":           true,
+	"true":           true,
+	"uname":          true,
+	"whoami":         true,
+	"wsl.exe":        true,
+}
+
+// commandAllowed checks whether the first token (basename) of the
+// command is in the allowlist. This prevents arbitrary code execution
+// while permitting the bootstrap workflow commands.
+func commandAllowed(command string) bool {
+	first := strings.TrimSpace(command)
+	if idx := strings.IndexAny(first, " \t"); idx >= 0 {
+		first = first[:idx]
+	}
+	base := filepath.Base(first)
+	return defaultAllowedCommands[base]
+}
 
 // BannerPrefix is the prefix of the SSH server version string. The full
 // banner includes the context UID so the local probe can verify it is
@@ -232,7 +271,12 @@ func handleSession(ctx context.Context, ch ssh.Channel, reqs <-chan *ssh.Request
 }
 
 func runCommand(ctx context.Context, ch ssh.Channel, command string) int {
-	slog.Debug("bootstrap-sshd: exec", "command", command)
+	if !commandAllowed(command) {
+		slog.Warn("bootstrap-sshd: blocked command (not in allowlist)", "command", command)
+		_, _ = fmt.Fprintf(ch.Stderr(), "jumpgate bootstrap: command not permitted: %s\n", strings.SplitN(command, " ", 2)[0])
+		return 126
+	}
+	slog.Info("bootstrap-sshd: exec", "command", command)
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {

@@ -117,7 +117,7 @@ func TestRemoveRelayMarker_SSHFails(t *testing.T) {
 
 func TestMarkerPath(t *testing.T) {
 	p := markerPath("my-context")
-	if p != "~/.jumpgate/relay-my-context.port" {
+	if p != "$HOME/.jumpgate/relay-my-context.port" {
 		t.Errorf("markerPath = %q", p)
 	}
 }
