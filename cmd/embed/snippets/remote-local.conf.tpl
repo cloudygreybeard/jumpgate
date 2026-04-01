@@ -9,6 +9,10 @@ Host {{.Context}}{{if .IsDefault}} remote{{end}}
 {{- if .RemoteKey}}
   IdentityFile {{.RemoteKey}}
 {{- end}}
+{{- if .KnownHostsFile}}
+  UserKnownHostsFile {{.KnownHostsFile}}
+  StrictHostKeyChecking accept-new
+{{- end}}
   AddKeysToAgent yes
   UseKeychain yes
   ProxyJump {{.Context}}-gate

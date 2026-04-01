@@ -394,7 +394,12 @@ func scpToRemote(ctx context.Context, localPath, remoteHost, remotePath string) 
 		_ = sshRun(ctx, remoteHost, "mkdir -p "+dir)
 	}
 	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, "scp", "-O", "-q", localPath, remoteHost+":"+remotePath)
+	cmd := exec.CommandContext(ctx, "scp",
+		"-O", "-q",
+		"-o", "UserKnownHostsFile="+internalssh.KnownHostsFile(),
+		"-o", "StrictHostKeyChecking=accept-new",
+		localPath, remoteHost+":"+remotePath,
+	)
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if stderr.Len() > 0 {
