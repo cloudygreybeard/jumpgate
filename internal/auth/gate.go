@@ -3,10 +3,12 @@ package auth
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/cloudygreybeard/jumpgate/internal/config"
 	"github.com/cloudygreybeard/jumpgate/internal/hooks"
@@ -76,10 +78,19 @@ func openGateSession(ctx context.Context, rc *config.ResolvedContext, token stri
 	}
 
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	cmd.Stdin = nil
 
-	return cmd.Run()
+	var stderr strings.Builder
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
+
+	if err := cmd.Run(); err != nil {
+		msg := stderr.String()
+		if strings.Contains(msg, "Permission denied") {
+			return fmt.Errorf("gate authentication failed (token may have expired) -- retry: jumpgate connect")
+		}
+		return fmt.Errorf("gate session: %w", err)
+	}
+	return nil
 }
 
 func socketExists(path string) bool {

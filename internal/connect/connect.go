@@ -67,10 +67,14 @@ func connectLocal(ctx context.Context, rc *config.ResolvedContext, cfg *config.C
 	ccFile := rc.Context.Auth.CCFile
 	remoteHost := rc.Derived.RemoteHost
 
-	if internalssh.Probe(ctx, remoteHost, ccFile) {
+	result := internalssh.Probe(ctx, remoteHost, ccFile)
+	if result.Reachable {
 		fmt.Printf("--- remote [%s] reachable ---\n", rc.Name)
 		_, _ = hooks.RunOptional(ctx, rc, "on-connect")
 		return nil
+	}
+	if err := probeError(result, rc); err != nil {
+		return err
 	}
 
 	fmt.Printf("Remote [%s]: not yet reachable -- waiting...\n", rc.Name)
@@ -94,11 +98,16 @@ func connectLocal(ctx context.Context, rc *config.ResolvedContext, cfg *config.C
 
 		_, _ = hooks.RunOptional(pollCtx, rc, "on-poll-tick")
 
-		if internalssh.Probe(pollCtx, remoteHost, ccFile) {
+		probeResult := internalssh.Probe(pollCtx, remoteHost, ccFile)
+		if probeResult.Reachable {
 			fmt.Println()
 			fmt.Printf("--- remote [%s] reachable ---\n", rc.Name)
 			_, _ = hooks.RunOptional(ctx, rc, "on-connect")
 			return nil
+		}
+		if err := probeError(probeResult, rc); err != nil {
+			fmt.Println()
+			return err
 		}
 
 		delay := pollDelay(attempt)
@@ -182,11 +191,6 @@ func connectRemoteUnix(ctx context.Context, rc *config.ResolvedContext) error {
 		}
 	}
 
-	gateHost := rc.Derived.GateHost
-	if err := internalssh.CheckPortAvailable(ctx, gateHost, rc.Context.Relay.RemotePort); err != nil {
-		return fmt.Errorf("relay port %d is already in use on the gate -- use --relay-port to try a different port", rc.Context.Relay.RemotePort)
-	}
-
 	fmt.Printf("Relay [%s]: connecting to %s (RemoteForward %d -> localhost:22)...\n",
 		rc.Name, relayHost, rc.Context.Relay.RemotePort)
 
@@ -203,7 +207,10 @@ func connectRemoteUnix(ctx context.Context, rc *config.ResolvedContext) error {
 	if markerID == "" {
 		markerID = rc.Name
 	}
-	if err := internalssh.WriteRelayMarker(ctx, gateHost, markerID, rc.Context.Relay.RemotePort); err != nil {
+	// Write marker via the relay host — its ControlMaster is already open,
+	// so this piggybacks on the existing session instead of requiring a
+	// separate authentication to the gate alias.
+	if err := internalssh.WriteRelayMarker(ctx, relayHost, markerID, rc.Context.Relay.RemotePort); err != nil {
 		slog.Warn("could not write relay marker on gate", "error", err)
 	} else {
 		slog.Debug("relay marker written", "port", rc.Context.Relay.RemotePort)
@@ -269,6 +276,25 @@ func persistRelayPort(rc *config.ResolvedContext) error {
 	}
 
 	return config.SaveRaw(configPath, doc)
+}
+
+// probeError returns a user-facing error for actionable probe failures,
+// or nil if the probe should keep polling.
+func probeError(r internalssh.ProbeResult, rc *config.ResolvedContext) error {
+	switch r.Detail {
+	case "host-key-changed":
+		return fmt.Errorf("remote host key has changed.\n"+
+			"The remote may have been re-bootstrapped or sshd regenerated its keys.\n"+
+			"To accept the new key, run:\n"+
+			"  ssh-keygen -R '[localhost]:%d' -f %s\n"+
+			"Then retry: jumpgate connect",
+			rc.Context.Relay.RemotePort, internalssh.KnownHostsFile())
+	case "permission-denied":
+		return fmt.Errorf("remote rejected authentication (Permission denied).\n" +
+			"Check that the remote's sshd accepts the key configured in remote.key,\n" +
+			"or re-bootstrap with: jumpgate bootstrap")
+	}
+	return nil
 }
 
 func socketExists(path string) bool {

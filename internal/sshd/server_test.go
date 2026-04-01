@@ -184,6 +184,7 @@ func TestCommandAllowlist(t *testing.T) {
 		{"echo hello", true},
 		{"__jumpgate_receive_bundle /tmp/extract", true},
 		{"__jumpgate_receive_bundle", true},
+		{"__jumpgate_bootstrap_done", true},
 		{"mkdir -p ~/.config/jumpgate", true},
 		{"scp -t .config/jumpgate/config.yaml", true},
 		{"/usr/bin/scp -t foo", true},
@@ -354,6 +355,77 @@ func TestServerReceiveBundle(t *testing.T) {
 		if string(got) != string(want) {
 			t.Errorf("file %s: got %q, want %q", name, got, want)
 		}
+	}
+
+	cancel()
+	<-errCh
+}
+
+func TestServerShutdownCommand(t *testing.T) {
+	hostKeyPath, authKeyPath, clientSigner := setupTestKeys(t)
+
+	srv, err := New(hostKeyPath, authKeyPath, "127.0.0.1:0", "test-uid")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe(ctx) }()
+
+	for i := 0; i < 50; i++ {
+		if srv.Addr() != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if srv.Addr() == "" {
+		t.Fatal("server did not start listening")
+	}
+
+	hostKey, err := os.ReadFile(hostKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostSigner, err := ssh.ParsePrivateKey(hostKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientCfg := &ssh.ClientConfig{
+		User:            "test",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(clientSigner)},
+		HostKeyCallback: ssh.FixedHostKey(hostSigner.PublicKey()),
+	}
+
+	client, err := ssh.Dial("tcp", srv.Addr(), clientCfg)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	out, err := session.Output(ShutdownCommand())
+	if err != nil {
+		t.Fatalf("shutdown command failed: %v", err)
+	}
+	session.Close()
+
+	if got := string(out); got != "bootstrap server shutting down\n" {
+		t.Errorf("shutdown output = %q, want %q", got, "bootstrap server shutting down\n")
+	}
+
+	// ShutdownCh should be closed
+	select {
+	case <-srv.ShutdownCh():
+	case <-time.After(2 * time.Second):
+		t.Fatal("ShutdownCh was not closed after shutdown command")
 	}
 
 	cancel()

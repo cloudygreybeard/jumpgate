@@ -95,6 +95,7 @@ jumpgate connect [CONTEXT]                Gate + auth + poll for remote
 jumpgate connect --relay-port PORT        Override relay port for this session
 jumpgate disconnect [CONTEXT]             Close session, destroy ticket
 jumpgate disconnect --all [CONTEXT]       Also tear down the remote relay first
+jumpgate disconnect --force [CONTEXT]     Kill orphaned SSH processes and clean up sockets
 jumpgate status [CONTEXT]                 Show gate / auth / remote status
 jumpgate watch [CONTEXT]                  Monitor relay with heartbeat (remote)
 jumpgate watch --relay-port PORT          Override relay port for this session
@@ -122,6 +123,7 @@ jumpgate config migrate              Check config format, print guidance
 jumpgate bootstrap [CONTEXT]         One-command setup (works on both local and remote)
 jumpgate bootstrap --reinit          Re-prompt for bootstrap payload on remote
 jumpgate bootstrap --server-only     Run embedded SSH server only (remote, no relay)
+jumpgate bootstrap --relay-port PORT Override relay port for this session
 ```
 
 ### Setup
@@ -351,6 +353,9 @@ configuration, hooks, SSH snippets, and Windows integration scripts as a
 single compressed archive over a native Go SSH connection. The embedded
 server extracts the bundle in-process.
 
+Once setup completes, the local sends a shutdown signal and the remote's
+embedded server exits cleanly — no manual Ctrl+C needed.
+
 The embedded server is a one-time bootstrap mechanism — once sshd is
 installed on the remote, `jumpgate connect` is used instead.
 
@@ -445,8 +450,8 @@ responsibly:
   (`chmod 600 ~/.config/jumpgate/config.yaml`).
 - **The embedded bootstrap server allows exec.** While gated by an
   allowlist and single-key auth, the bootstrap server can execute
-  commands as the current user. Run `jumpgate bootstrap` only when
-  actively bootstrapping, and stop it promptly afterward.
+  commands as the current user. The server auto-terminates when the
+  local side completes setup, but can also be stopped with Ctrl+C.
 
 ### Reporting vulnerabilities
 
