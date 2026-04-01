@@ -744,6 +744,13 @@ func TestWatchRelayPortFlag(t *testing.T) {
 	}
 }
 
+func TestBootstrapRelayPortFlag(t *testing.T) {
+	f := bootstrapCmd.Flags().Lookup("relay-port")
+	if f == nil {
+		t.Error("bootstrap command missing --relay-port flag")
+	}
+}
+
 func TestConnectWithConfigAndContext(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)

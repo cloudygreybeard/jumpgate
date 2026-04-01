@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -26,6 +27,7 @@ const bootstrapSSHPort = 2222
 
 var flagBootstrapServerOnly bool
 var flagBootstrapReinit bool
+var flagBootstrapRelayPort int
 
 var bootstrapCmd = &cobra.Command{
 	Use:   "bootstrap [CONTEXT]",
@@ -73,6 +75,10 @@ Once sshd is running on the remote, use 'jumpgate connect' instead.`,
 			return err
 		}
 
+		if flagBootstrapRelayPort > 0 {
+			rc.Context.Relay.RemotePort = flagBootstrapRelayPort
+		}
+
 		if rc.IsLocal() {
 			return runBootstrapLocal(cmd, rc, cfg)
 		}
@@ -85,6 +91,8 @@ func init() {
 		"run the embedded SSH server without opening the relay tunnel")
 	bootstrapCmd.Flags().BoolVar(&flagBootstrapReinit, "reinit", false,
 		"re-prompt for the bootstrap payload even if config already exists")
+	bootstrapCmd.Flags().IntVar(&flagBootstrapRelayPort, "relay-port", 0,
+		"override relay port for this session (use if default port is stale)")
 	rootCmd.AddCommand(bootstrapCmd)
 }
 
@@ -260,14 +268,21 @@ func runBootstrapLocal(cmd *cobra.Command, rc *config.ResolvedContext, cfg *conf
 // the expected context UID is listening (not regular sshd or a different
 // context's bootstrap). Stale known_hosts entries are cleared before this
 // is called. No hooks are invoked during polling.
+//
+// When a regular sshd is detected on the relay port, we keep polling for
+// a grace period rather than failing immediately. A stale RemoteForward
+// from a previous session may be forwarding to the devbox's real sshd;
+// once the bastion reaps that socket the bootstrap server can bind the port.
 func waitForRemote(ctx context.Context, remoteHost, expectedUID string) error {
 	const maxWait = 10 * time.Minute
+	const staleGraceAttempts = 6
 	pollCtx, cancel := context.WithTimeout(ctx, maxWait)
 	defer cancel()
 
 	expectedBanner := sshd.BannerPrefix + "_" + expectedUID
 
 	attempt := 0
+	sshdHits := 0
 	for {
 		probeCtx, probeCancel := context.WithTimeout(pollCtx, 10*time.Second)
 		probe := exec.CommandContext(probeCtx, "ssh",
@@ -295,8 +310,17 @@ func waitForRemote(ctx context.Context, remoteHost, expectedUID string) error {
 			return fmt.Errorf("remote [%s] is running a bootstrap server for a different context\n"+
 				"  Expected UID %s but got a different one", remoteHost, expectedUID)
 		case !bannerMatch && err == nil:
-			return fmt.Errorf("remote [%s] is running regular sshd, not the bootstrap server\n"+
-				"  Use 'jumpgate setup remote' to push config to an already-running remote", remoteHost)
+			sshdHits++
+			if sshdHits == 1 {
+				fmt.Printf("\n  Note: relay port has a stale forward to regular sshd (previous session).\n")
+				fmt.Printf("  Waiting for it to clear...\n")
+			}
+			if sshdHits >= staleGraceAttempts {
+				return fmt.Errorf("remote [%s] is running regular sshd, not the bootstrap server\n"+
+					"  If a previous session is holding the port, wait 60s and retry.\n"+
+					"  If the remote is already set up, use 'jumpgate setup remote' instead", remoteHost)
+			}
+			slog.Debug("sshd detected on relay port (stale forward?)", "hits", sshdHits, "grace", staleGraceAttempts)
 		}
 
 		attempt++
@@ -402,15 +426,29 @@ func runBootstrapRemote(parentCtx context.Context, rc *config.ResolvedContext) e
 
 	relayErr := internalssh.RunRelayForeground(ctx, gateHost, relayPort, bootstrapSSHPort)
 
+	// Capture whether the user cancelled BEFORE we cancel the embedded server
+	userCancelled := ctx.Err() != nil
+
 	// Relay ended — shut down the embedded server
 	cancel()
 	<-srvErr
 
-	if relayErr != nil && ctx.Err() == nil {
+	if relayErr != nil && !userCancelled {
+		fmt.Println()
+		fmt.Println("Bootstrap session ended.")
+		fmt.Println()
+		fmt.Printf("The relay port %d may be stale on the bastion from a previous session.\n", relayPort)
+		fmt.Println("Options:")
+		fmt.Printf("  1. Wait 60-120 seconds and retry: jumpgate bootstrap\n")
+		fmt.Printf("  2. Use a different port:           jumpgate bootstrap --relay-port %d\n", randomEphemeralPort())
 		return fmt.Errorf("relay: %w", relayErr)
 	}
 
 	fmt.Println()
 	fmt.Println("Bootstrap session ended.")
 	return nil
+}
+
+func randomEphemeralPort() int {
+	return rand.Intn(16384) + 49152
 }

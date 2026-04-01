@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"runtime"
+	"time"
 
 	"github.com/cloudygreybeard/jumpgate/internal/auth"
 	"github.com/cloudygreybeard/jumpgate/internal/config"
@@ -21,26 +22,45 @@ func Disconnect(ctx context.Context, rc *config.ResolvedContext) {
 }
 
 func disconnectRemote(ctx context.Context, rc *config.ResolvedContext) {
-	// Remove relay marker from the gate before tearing down the connection
+	if runtime.GOOS == "windows" {
+		disconnectRemoteWindows(ctx, rc)
+		return
+	}
+	disconnectRemoteUnix(ctx, rc)
+}
+
+// disconnectRemoteWindows handles disconnect on Windows where there is no
+// ControlMaster. The relay runs as a foreground SSH session (Ctrl+C to stop),
+// so there is no socket to exit. Marker cleanup is skipped to avoid requiring
+// a fresh bastion authentication just to disconnect.
+func disconnectRemoteWindows(_ context.Context, rc *config.ResolvedContext) {
+	fmt.Printf("Relay [%s]: not active (foreground mode)\n", rc.Name)
+
+	cmd := exec.CommandContext(context.Background(), "kdestroy")
+	if err := cmd.Run(); err != nil {
+		fmt.Println("Auth: no ticket to destroy")
+	} else {
+		fmt.Println("Auth: ticket destroyed")
+	}
+}
+
+func disconnectRemoteUnix(ctx context.Context, rc *config.ResolvedContext) {
 	gateHost := rc.Derived.GateHost
 	markerID := rc.Context.UID
 	if markerID == "" {
 		markerID = rc.Name
 	}
-	if err := internalssh.RemoveRelayMarker(ctx, gateHost, markerID); err != nil {
+
+	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := internalssh.RemoveRelayMarker(cleanupCtx, gateHost, markerID); err != nil {
 		slog.Debug("relay marker cleanup failed", "error", err)
 	}
 
 	socketPath := rc.Derived.RelaySocket
 	relayHost := rc.Derived.RelayHost
 
-	if runtime.GOOS == "windows" {
-		if err := internalssh.ExitSocket(ctx, relayHost, socketPath); err != nil {
-			fmt.Printf("Relay [%s]: already gone\n", rc.Name)
-		} else {
-			fmt.Printf("Relay [%s]: closed\n", rc.Name)
-		}
-	} else if socketExists(socketPath) {
+	if socketExists(socketPath) {
 		if err := internalssh.ExitSocket(ctx, relayHost, socketPath); err != nil {
 			fmt.Printf("Relay [%s]: already gone\n", rc.Name)
 		} else {

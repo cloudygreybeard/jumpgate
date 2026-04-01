@@ -152,12 +152,23 @@ func connectRemote(ctx context.Context, rc *config.ResolvedContext, cfg *config.
 // so passing -R as well would cause a duplicate port bind failure.
 func connectRemoteWindows(ctx context.Context, rc *config.ResolvedContext) error {
 	gateHost := rc.Derived.GateHost
+	relayPort := rc.Context.Relay.RemotePort
 
 	fmt.Printf("Relay [%s]: connecting via %s (RemoteForward %d -> localhost:22)...\n",
-		rc.Name, gateHost, rc.Context.Relay.RemotePort)
+		rc.Name, gateHost, relayPort)
 	fmt.Println("  (foreground session — Ctrl+C to close)")
 
-	return internalssh.RunRelayForeground(ctx, gateHost, rc.Context.Relay.RemotePort, 22)
+	err := internalssh.RunRelayForeground(ctx, gateHost, relayPort, 22)
+	if err != nil && ctx.Err() == nil {
+		fmt.Println()
+		fmt.Printf("If relay port %d is stale from a previous session, wait 60-120s and retry,\n", relayPort)
+		fmt.Printf("or use: jumpgate connect --relay-port %d\n", randomRelayPort())
+	}
+	return err
+}
+
+func randomRelayPort() int {
+	return rand.Intn(16384) + 49152
 }
 
 func connectRemoteUnix(ctx context.Context, rc *config.ResolvedContext) error {
