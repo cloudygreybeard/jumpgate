@@ -1,14 +1,22 @@
 package ssh
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 )
+
+// relaySentinel is echoed by the remote command after SSH authentication
+// and RemoteForward both succeed. With ExitOnForwardFailure=yes, SSH exits
+// before running the command if forwarding fails, so receiving this string
+// on stdout is positive confirmation that the relay tunnel is alive.
+const relaySentinel = "__JUMPGATE_RELAY_OK__"
 
 func OpenControlMaster(ctx context.Context, host string, extraArgs ...string) error {
 	args := []string{"-o", "ControlPersist=4h", "-N", "-f"}
@@ -20,13 +28,17 @@ func OpenControlMaster(ctx context.Context, host string, extraArgs ...string) er
 // RunRelayForeground runs the relay SSH session in the foreground (blocking).
 // Used on Windows where ControlMaster is unavailable and every SSH command
 // requires separate authentication, so we run a single clean session.
-// relayPort is passed explicitly via -R so the tunnel works even when the
-// SSH config was generated before the port was auto-assigned.
-// localPort is the target port on the local side (22 for sshd, 2222 for
-// the embedded bootstrap SSH server).
+//
+// Instead of -N (no remote command), a sentinel command is run on the
+// bastion: "echo <sentinel>; cat > /dev/null". With ExitOnForwardFailure=yes,
+// SSH exits before running the command if forwarding fails. Therefore,
+// receiving the sentinel on stdout is positive confirmation that
+// authentication succeeded AND the RemoteForward port is bound.
+//
+// If the bastion restricts command execution (ForceCommand), the sentinel
+// won't arrive and we fall back to assuming alive after 60 seconds.
 func RunRelayForeground(ctx context.Context, host string, relayPort, localPort int) error {
 	args := []string{
-		"-N",
 		"-o", "ExitOnForwardFailure=yes",
 		"-o", "ServerAliveInterval=30",
 		"-o", "ServerAliveCountMax=3",
@@ -34,12 +46,18 @@ func RunRelayForeground(ctx context.Context, host string, relayPort, localPort i
 	if relayPort > 0 {
 		args = append(args, "-R", fmt.Sprintf("%d:127.0.0.1:%d", relayPort, localPort))
 	}
-	args = append(args, host)
+	args = append(args, host,
+		fmt.Sprintf("echo %s; cat > /dev/null", relaySentinel))
+
 	slog.Debug("ssh", "op", "relay-foreground", "args", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("ssh relay start: %w", err)
@@ -48,11 +66,46 @@ func RunRelayForeground(ctx context.Context, host string, relayPort, localPort i
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
-	// First tick at 10s to confirm auth succeeded, then every 30s.
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
+	relayConfirmed := make(chan struct{})
+	go func() {
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			if scanner.Text() == relaySentinel {
+				close(relayConfirmed)
+				break
+			}
+			fmt.Fprintln(os.Stdout, scanner.Text())
+		}
+		_, _ = io.Copy(io.Discard, stdoutPipe)
+	}()
+
 	start := time.Now()
-	firstTick := true
+
+	// Phase 1: wait for positive confirmation that auth + forwarding worked.
+	fallback := time.NewTimer(60 * time.Second)
+	select {
+	case <-relayConfirmed:
+		fallback.Stop()
+		uptime := time.Since(start).Truncate(time.Second)
+		fmt.Fprintf(os.Stderr, "  relay: alive (%s)\n", uptime)
+	case <-fallback.C:
+		slog.Debug("relay sentinel not received, assuming alive (ForceCommand?)")
+		uptime := time.Since(start).Truncate(time.Second)
+		fmt.Fprintf(os.Stderr, "  relay: alive (%s)\n", uptime)
+	case err := <-done:
+		fallback.Stop()
+		if err != nil {
+			return fmt.Errorf("ssh relay: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		fallback.Stop()
+		return killRelay(cmd, done)
+	}
+
+	// Phase 2: periodic heartbeat — SSH is confirmed alive.
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -64,21 +117,21 @@ func RunRelayForeground(ctx context.Context, host string, relayPort, localPort i
 		case <-ticker.C:
 			uptime := time.Since(start).Truncate(time.Second)
 			fmt.Fprintf(os.Stderr, "  relay: alive (%s)\n", uptime)
-			if firstTick {
-				ticker.Reset(30 * time.Second)
-				firstTick = false
-			}
 		case <-ctx.Done():
-			_ = cmd.Process.Signal(os.Interrupt)
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				_ = cmd.Process.Kill()
-				<-done
-			}
-			return nil
+			return killRelay(cmd, done)
 		}
 	}
+}
+
+func killRelay(cmd *exec.Cmd, done <-chan error) error {
+	_ = cmd.Process.Signal(os.Interrupt)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+	}
+	return nil
 }
 
 func OpenRelay(ctx context.Context, host, socketPath string) error {
