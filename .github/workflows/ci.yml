@@ -59,3 +59,32 @@ jobs:
           distribution: goreleaser
           version: latest
           args: check
+
+  build-artifacts:
+    if: github.event_name == 'pull_request'
+    needs: [test, lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build snapshot binaries
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --snapshot --clean
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jumpgate-snapshot
+          path: dist/jumpgate_*
+          retention-days: 7

@@ -23,6 +23,8 @@ type TemplateData struct {
 	RelayPort      int
 	RemoteKey      string
 	KnownHostsFile string
+	AuthType       string // "kerberos" or "key"
+	GateKey        string // IdentityFile for key-based gate auth
 }
 
 // GenerateSSHConfig generates SSH config from templates for all contexts.
@@ -58,6 +60,7 @@ func GenerateSSHConfig(cfg *config.Config, configDir, socketDir, mode string, sn
 
 		p := rc.Context
 		knownHostsFile := filepath.Join(configDir, "known_hosts")
+		gateKey := p.Remote.Key
 		data := TemplateData{
 			Context:        name,
 			IsDefault:      name == cfg.DefaultContext,
@@ -69,6 +72,8 @@ func GenerateSSHConfig(cfg *config.Config, configDir, socketDir, mode string, sn
 			RelayPort:      p.Relay.RemotePort,
 			RemoteKey:      p.Remote.Key,
 			KnownHostsFile: knownHostsFile,
+			AuthType:       p.Auth.Type,
+			GateKey:        gateKey,
 		}
 
 		if mode == "remote" {
@@ -155,9 +160,17 @@ func writeLocalGateFallback(b *strings.Builder, d TemplateData) {
 	if d.Port > 0 {
 		fmt.Fprintf(b, "  Port %d\n", d.Port)
 	}
-	fmt.Fprintf(b, "  GSSAPIAuthentication yes\n")
-	fmt.Fprintf(b, "  GSSAPIDelegateCredentials no\n")
-	fmt.Fprintf(b, "  PreferredAuthentications gssapi-with-mic,keyboard-interactive\n")
+	if d.AuthType == "kerberos" {
+		fmt.Fprintf(b, "  GSSAPIAuthentication yes\n")
+		fmt.Fprintf(b, "  GSSAPIDelegateCredentials no\n")
+		fmt.Fprintf(b, "  PreferredAuthentications gssapi-with-mic,keyboard-interactive\n")
+	} else {
+		fmt.Fprintf(b, "  GSSAPIAuthentication no\n")
+		fmt.Fprintf(b, "  PreferredAuthentications publickey\n")
+		if d.GateKey != "" {
+			fmt.Fprintf(b, "  IdentityFile %s\n", d.GateKey)
+		}
+	}
 	fmt.Fprintf(b, "  ServerAliveInterval 30\n")
 	fmt.Fprintf(b, "  ControlMaster auto\n")
 	fmt.Fprintf(b, "  ControlPath %s/%s-gate.sock\n", d.SocketDir, d.Context)
@@ -196,8 +209,16 @@ func writeRemoteGateFallback(b *strings.Builder, d TemplateData) {
 	if d.Port > 0 {
 		fmt.Fprintf(b, "  Port %d\n", d.Port)
 	}
-	fmt.Fprintf(b, "  GSSAPIAuthentication yes\n")
-	fmt.Fprintf(b, "  GSSAPIDelegateCredentials no\n")
+	if d.AuthType == "kerberos" {
+		fmt.Fprintf(b, "  GSSAPIAuthentication yes\n")
+		fmt.Fprintf(b, "  GSSAPIDelegateCredentials no\n")
+	} else {
+		fmt.Fprintf(b, "  GSSAPIAuthentication no\n")
+		fmt.Fprintf(b, "  PreferredAuthentications publickey\n")
+		if d.GateKey != "" {
+			fmt.Fprintf(b, "  IdentityFile %s\n", d.GateKey)
+		}
+	}
 	fmt.Fprintf(b, "  MACs hmac-sha2-256,hmac-sha2-512\n")
 	fmt.Fprintf(b, "  ServerAliveInterval 30\n")
 	b.WriteString("\n")
@@ -212,8 +233,16 @@ func writeRemoteRelayFallback(b *strings.Builder, d TemplateData) {
 	if d.Port > 0 {
 		fmt.Fprintf(b, "  Port %d\n", d.Port)
 	}
-	fmt.Fprintf(b, "  GSSAPIAuthentication yes\n")
-	fmt.Fprintf(b, "  GSSAPIDelegateCredentials no\n")
+	if d.AuthType == "kerberos" {
+		fmt.Fprintf(b, "  GSSAPIAuthentication yes\n")
+		fmt.Fprintf(b, "  GSSAPIDelegateCredentials no\n")
+	} else {
+		fmt.Fprintf(b, "  GSSAPIAuthentication no\n")
+		fmt.Fprintf(b, "  PreferredAuthentications publickey\n")
+		if d.GateKey != "" {
+			fmt.Fprintf(b, "  IdentityFile %s\n", d.GateKey)
+		}
+	}
 	fmt.Fprintf(b, "  MACs hmac-sha2-256,hmac-sha2-512\n")
 	fmt.Fprintf(b, "  ServerAliveInterval 30\n")
 	if d.RelayPort > 0 {
